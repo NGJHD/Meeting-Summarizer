@@ -28,12 +28,16 @@ update.log
 
 # ---- development only, not shipped --------------------------------------
 # `tools/` is a scratch area holding test audio and one-off comparison scripts.
-# The exception is the release builder: it has to be in the repository for a
-# release to be reproducible. It is still kept out of both zips -- see the
-# EXCLUDE_PREFIXES filter in it.
+# The exceptions are the two release scripts: they have to be in the repository
+# for a release to be reproducible. They are still kept out of both zips -- see
+# the EXCLUDE_PREFIXES filter in make_release.py.
 tools/*
 !tools/make_release.py
+!tools/check_release.py
 work/
+
+# A note to whoever is cutting the release, not part of the app.
+RELEASE_GUIDE.md
 
 # ---- editor / OS noise ---------------------------------------------------
 __pycache__/
