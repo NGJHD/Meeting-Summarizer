@@ -2276,6 +2276,42 @@ Replaced and re-verified from inside the finished zip: `--enable-gpl` absent,
 `--enable-version3` present. Worth remembering that a licence file is a claim about an
 artefact, and only checking the artefact tests it.
 
+### It also stranded v1.0.0 and v1.0.1
+
+The cost was not free, and it was not visible until tested. The picker that decides which
+asset to download is **the installed copy's**, not the new release's. v1.0.0 and v1.0.1
+shipped this:
+
+```python
+if len(zips) != 1:
+    return zips[0] if len(zips) == 1 else None
+```
+
+-- refuse whenever a release carries more than one `.zip`. v1.0.2 carries two, so both of
+those versions now answer *"The latest release has no download attached to it"* and can
+never update themselves again. Confirmed by downloading the real v1.0.0 zip, running its
+own `updater.check()` against the live release, and reading `status: error` back.
+
+The population is two releases published the same day and held only by the operator, so
+the accepted fix is to replace those installs by hand. Recorded because the general shape
+recurs: **a change to the layout of a release is judged by every version that came
+before it.** Today's picker is written to tolerate that -- it filters `-full` out and
+only gives up when no single candidate remains -- so adding further assets is safe, but
+renaming the update payload would not be.
+
+Being several versions behind is otherwise a non-event: the app asks for `/releases/latest`
+and installs it directly, with no chain to walk. A 1.0.0 install carrying the current
+picker was pointed at v1.0.2 with 1.0.1 skipped; it downloaded, verified across the
+skipped version, ran the shipped `apply-update.cmd`, and came out at 1.0.2 with the edited
+`config.json`, `calibration.json` and `output\` intact.
+
+Two things do not survive a hop, and both scale with how many versions are skipped.
+`robocopy /E` never deletes, so a file removed in a skipped version stays on disk -- the
+same property that protects the user's data. And the update payload carries no `bin\` or
+`models\`, so a release needing a newer llama.cpp build or a renamed model updates the
+code and leaves the binaries behind. That has to go in the release notes, because the
+update button cannot deliver it.
+
 ---
 
 ## 10. Still not measured
