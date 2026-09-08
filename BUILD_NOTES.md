@@ -2230,6 +2230,7 @@ earlier reasoning against it was partly wrong. Measured:
 |---|---|
 | `runtime\` + `bin\ffmpeg.exe` + `bin\whisper-vulkan\` | 159 MB |
 | `runtime\` + all of `bin\` | **1.14 GB** |
+| the same plus the three small models | **1.24 GB** |
 | GitHub per-asset limit | 2 GB |
 
 So size was never the obstacle for the binaries, and neither was licensing -- everything
@@ -2237,17 +2238,31 @@ in there is MIT, BSD, Apache, PSF or LGPL, all redistributable. **Only the model
 impossible:** `Qwen3.8-27B-UD-Q4_K_M.gguf` is 16.5 GB and `IQ3_XXS` is 10.9 GB, each on
 its own over the 2 GB limit, so they can never be release assets whatever the packaging.
 
+The three *small* models do fit, and were added once the bundle proved out: silero
+(0.8 MB), the pyannote segmentation export (5.7 MB) and TitaNet (96.7 MB), which
+compress to 96 MB and take the bundle to 1.24 GB. They earn their place twice. They are
+the only two downloads that were never pinned to immutable bytes -- sherpa-onnx
+publishes both speaker models on floating release tags, so the bytes could change
+under us -- and the segmentation model is the single ugliest step in
+`DOWNLOAD_MODELS.bat`, a tar.bz2 that has to be fetched, unpacked, copied, renamed and
+swept up, with two distinct failure branches. Shipping them retires all of that.
+
+Whisper large-v3-turbo was measured and rejected: 1549 MB raw, 1424 MB zipped (these are
+float16 weights, so compression buys 8%), which would put the bundle at 2.56 GB.
+
+A fresh extract of the bundle now reports three missing model files instead of six.
+
 A release therefore carries two zips, built by `tools/make_release.py`:
 
-- `Meeting-Summariser-vX.Y.Z-full.zip` (~1.14 GB) -- a first install. Unzip it and only
-  the models remain to download.
+- `Meeting-Summariser-vX.Y.Z-full.zip` (~1.24 GB) -- a first install. Unzip it and only
+  the three large models remain to download.
 - `Meeting-Summariser-vX.Y.Z.zip` (~190 KB) -- the update payload.
 
 ### The updater must never take the full one
 
 Two reasons, and the second is the real one:
 
-1. A 190 KB update would become 1.14 GB, to ship a few changed `.py` files.
+1. A 190 KB update would become 1.24 GB, to ship a few changed `.py` files.
 2. It would robocopy `runtime\python.exe` over the interpreter the running app is
    executing from. `run.bat` launches `runtime\python.exe -m uvicorn`, and Windows locks
    a running executable's image. A half-copied interpreter cannot start, so it cannot
@@ -2260,7 +2275,7 @@ payload is only `.py`, `.js` and `.md`; fatal if the interpreter were in it.
 
 `version.pick_asset` therefore skips any asset carrying `-full`, and **refuses rather
 than guesses** when that leaves no candidate -- a release with only a full bundle yields
-"nothing to install", not "install the 1.14 GB one". Exercised against seven asset layouts
+"nothing to install", not "install the 1.24 GB one". Exercised against seven asset layouts
 including both orderings, the single-zip releases v1.0.0 and v1.0.1, and the ambiguous
 two-zip case.
 

@@ -5,7 +5,7 @@ r"""Build the two release assets. Development only; not shipped.
 A release carries two zips and they are not variants of the same thing:
 
   Meeting-Summariser-vX.Y.Z.zip        the source tree, ~190 KB
-  Meeting-Summariser-vX.Y.Z-full.zip   the same plus runtime\ and bin\, ~1.14 GB
+  Meeting-Summariser-vX.Y.Z-full.zip   the same plus runtime\, bin\ and the small models, ~1.24 GB
 
 The small one is the **update payload** -- what the in-app updater downloads and
 robocopies over an install. It must stay small and must never contain
@@ -14,12 +14,12 @@ running app is executing from, and a half-copied interpreter cannot start, so
 it cannot self-repair. `version.pick_asset` skips anything with `-full` in the
 name for exactly that reason.
 
-The full one is for a **first install**: unzip it and only the models are left
-to download. Everything in it is the binary set that was actually tested,
-rather than whatever the pinned URLs happen to serve later.
+The full one is for a **first install**: unzip it and only the three large
+models are left to download. Everything in it is the set that was actually
+tested, rather than whatever the pinned URLs happen to serve later.
 
-Models are never bundled. Two of them are individually larger than GitHub's
-2 GB per-asset limit, so `DOWNLOAD_MODELS.bat` remains the only way to get them.
+The three large models are never bundled -- see BUNDLED_FILES below for which
+ones do travel and why.
 """
 
 from __future__ import annotations
@@ -35,6 +35,21 @@ from server import version  # noqa: E402
 
 PREFIX = "Meeting-Summariser"
 BUNDLED_DIRS = ("runtime", "bin")
+
+# The models small enough to travel, named individually -- `models\` as a whole
+# is 27 GB. Together these are 103 MB and they carry their weight twice over:
+# they are also the only two downloads that were never pinned to immutable
+# bytes (sherpa-onnx publishes them on floating release tags), and the
+# segmentation one arrives as a tar.bz2 that has to be unpacked and renamed.
+# Shipping them retires the most fragile step in DOWNLOAD_MODELS.bat.
+#
+# Whisper large-v3-turbo is deliberately not here. It compresses to 1.42 GB,
+# which would take the bundle to 2.56 GB against GitHub's 2 GB per-asset limit.
+BUNDLED_FILES = (
+    "models/ggml-silero-v5.1.2.bin",
+    "models/segmentation-3.0.onnx",
+    "models/speaker-embedding.onnx",
+)
 SKIP_PARTS = {"__pycache__"}
 # This script is tracked so that a release is reproducible from the repository,
 # but it is development tooling and has no business in an install.
@@ -66,6 +81,11 @@ def write(target: Path, extras: bool) -> None:
                 if not src.is_file() or SKIP_PARTS & set(src.parts):
                     continue
                 z.write(src, "%s/%s" % (PREFIX, src.relative_to(ROOT).as_posix()))
+        for rel in BUNDLED_FILES:
+            src = ROOT / rel
+            if not src.is_file():
+                raise SystemExit("missing %s -- run DOWNLOAD_MODELS.bat first" % rel)
+            z.write(src, "%s/%s" % (PREFIX, rel))
 
 
 def main() -> None:

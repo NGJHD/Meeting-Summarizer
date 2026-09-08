@@ -86,15 +86,17 @@ Each release carries two zips, and they are not variants of the same thing.
 
 | Asset | Size | For |
 |---|---|---|
-| `Meeting-Summariser-vX.Y.Z-full.zip` | ~1.1 GB | **A first install.** Everything except the models: the app, the Python runtime, ffmpeg and every inference binary — the exact set that was tested |
+| `Meeting-Summariser-vX.Y.Z-full.zip` | ~1.2 GB | **A first install.** The app, the Python runtime, ffmpeg, every inference binary and the three small models — the exact set that was tested |
 | `Meeting-Summariser-vX.Y.Z.zip` | ~190 KB | The update payload — what *Check for updates* downloads |
 
-The models are never release assets: two of them are individually larger than GitHub's
-2 GB per-asset limit, so `DOWNLOAD_MODELS.bat` is the only way to get those.
+Three models are too big to ship and are all `DOWNLOAD_MODELS.bat` still has to fetch:
+the two language models, each individually larger than GitHub's 2 GB per-asset limit, and
+Whisper large-v3-turbo, which would take the bundle past it. The three small ones — the
+voice activity detector and the two speaker models, 103 MB together — are in the zip.
 
 *About → Check for updates* takes the small zip and replaces the code in place, leaving
 `bin/`, `models/`, `runtime/` and your `config.json` alone. It deliberately never takes
-the full bundle — that would turn a 190 KB update into 1.1 GB, and it would overwrite
+the full bundle — that would turn a 190 KB update into 1.2 GB, and it would overwrite
 `runtime\python.exe`, the interpreter the running app is executing from.
 
 If you cloned the source rather than taking the full zip, `DOWNLOAD_MODELS.bat` fetches

@@ -24,7 +24,7 @@ RELEASES_API = "https://api.github.com/repos/%s/releases/latest" % GITHUB_REPO
 # first install. This marker tells them apart.
 #
 # The updater must never take the full one. It would turn a 190 KB update into
-# 1.14 GB, and -- far worse -- it would robocopy `runtime\python.exe` over the
+# 1.24 GB, and -- far worse -- it would robocopy `runtime\python.exe` over the
 # interpreter the running app is executing from. A half-copied interpreter
 # cannot start, so it cannot self-repair.
 FULL_ASSET_MARKER = "-full"
@@ -75,5 +75,5 @@ def pick_asset(assets: list) -> dict | None:
                if FULL_ASSET_MARKER not in str(a.get("name", "")).lower()]
     # Exactly one candidate or nothing. A release carrying only a full bundle
     # yields no update rather than the dangerous one -- "nothing to install" is
-    # the correct answer there, not "install the 1.14 GB one".
+    # the correct answer there, not "install the 1.24 GB one".
     return updates[0] if len(updates) == 1 else None
