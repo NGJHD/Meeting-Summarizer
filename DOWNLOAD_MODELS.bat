@@ -96,10 +96,11 @@ rem  they add about 1.1 GB against 29 GB of models, which is not worth a
 rem  choice the user could get wrong.
 rem
 rem  There is deliberately no whisper-vulkan below. whisper.cpp publishes no
-rem  Vulkan binary for Windows -- it has to be built from source -- so on a
-rem  machine with no NVIDIA card the app runs the language model on Vulkan and
-rem  falls back to the CPU build for transcription. Drop a Vulkan build into
-rem  bin\whisper-vulkan\ and it will be picked up automatically.
+rem  Vulkan binary for Windows at all, so bin\whisper-vulkan\ is built from
+rem  source and ships inside the folder rather than being downloaded. The
+rem  recipe is in BUILD_NOTES.md section 9o. If that folder is missing, a
+rem  machine with no NVIDIA card still works: it runs the language model on
+rem  Vulkan and transcription on the CPU build.
 rem ---------------------------------------------------------------------------
 
 set "LLAMA_BUILD=b10852"

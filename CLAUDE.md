@@ -130,10 +130,10 @@ Vulkan build, which is the **only reliable cross-vendor VRAM read**.
 4095 MB for a 16 GB card, so it must not be used.
 
 **The choice is per engine, not per machine.** whisper.cpp publishes no Vulkan binary
-for Windows — it has to be built from source — so until `bin\whisper-vulkan\` exists,
-a non-NVIDIA machine runs the LLM on Vulkan and transcription on CPU. That is a
-deliberate, working intermediate state: the LLM is 80–95% of the wall time. Drop a
-Vulkan whisper build into that folder and it is picked up with no code change.
+for Windows at all, so `bin\whisper-vulkan\` is **built from source** and ships inside
+the folder rather than being downloaded — the recipe is in `BUILD_NOTES.md` §9o. If it
+is ever missing the app still works: a non-NVIDIA machine falls back to the CPU whisper
+build and keeps the LLM on Vulkan, which is 80–95% of the wall time.
 
 The CUDA binaries are **never** used as a fallback on a machine with no NVIDIA card:
 they would load `ggml-cuda.dll`, find no device and quietly run on CPU anyway — slower
@@ -165,7 +165,7 @@ MeetingSummariser\
     ffmpeg.exe
     cudart64_12.dll ...       <- CUDA runtime, shared by both NVIDIA builds
     llama-cuda\ llama-vulkan\ llama-cpu\      <- one folder per backend (§2.1)
-    whisper-cuda\ whisper-cpu\                <- whisper-vulkan must be built
+    whisper-cuda\ whisper-vulkan\ whisper-cpu\   <- vulkan is a local build
     sherpa-onnx-*.dll / .pyd  <- ONNX Runtime diarization, CPU only, vendor-neutral
   models\
     ggml-large-v3-turbo.bin

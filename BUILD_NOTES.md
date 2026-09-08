@@ -1765,23 +1765,78 @@ much harder to diagnose.
 | `--list-devices` on the Vulkan build | enumerates the 3080, 10051 MiB |
 | Flags we depend on (`--override-tensor`, `--flash-attn`, `--cache-type-k`, `--jinja`, `--no-webui`, `--n-gpu-layers`) | all present |
 | `bin\llama-vulkan\` contents | `ggml-vulkan.dll`, **no** `ggml-cuda.dll` |
+| whisper Vulkan build vs CUDA | identical text and identical DTW timestamps |
 | Pin `gpu.backend: vulkan`, run a real reduce | model loaded in 27 s, 2,254-token prompt processed |
 | Per-engine fallback with that pin | llama → vulkan, whisper → cuda |
 | `DOWNLOAD_MODELS.bat` skip path | all 12 items skip correctly |
 | `DOWNLOAD_MODELS.bat` download path | removed `bin\llama-cpu\`, re-run, downloaded and unpacked cleanly |
 
-One measurement worth recording: Vulkan **prefill was far slower than CUDA on this card** —
-2,254 prompt tokens in 138 s. That is a 10 GB card with 22 FFN layers pushed to system
-RAM, so it is a statement about this hardware under heavy offload, not about AMD or Intel
-with enough memory to hold the model. Generation had not produced a token after four
-minutes and the run was cancelled; there is no useful throughput figure to quote.
+**A retracted measurement.** An earlier note here recorded Vulkan prefill at 2,254 tokens
+in 138 s and called it slow. That run happened while ComfyUI was generating images on the
+same card. It is withdrawn — it measured contention, not Vulkan. No clean LLM throughput
+comparison has been made, because the card still shows 6.2 GB held by another process;
+the whisper figures below were taken back to back under identical conditions on a 1.6 GB
+model, so they are unaffected.
 
-### Still not done: the Vulkan whisper build
+### The Vulkan whisper build
 
-It needs a toolchain this machine does not have — Visual Studio 2022 **C++ workload**
-(not installed), CMake (not installed) and the Vulkan SDK (not installed). Roughly 8 GB
-of admin-elevated installers. Everything else is in place: build it, drop the result in
-`bin\whisper-vulkan\`, and it is picked up with no code change.
+whisper.cpp has never shipped a Vulkan Windows binary, so this one is built from source
+and travels inside the folder. Toolchain installed for it:
+
+| | |
+|---|---|
+| CMake 4.4.3 | `winget install Kitware.CMake --scope user` — no admin needed |
+| Vulkan SDK 1.4.357.0 | `winget install KhronosGroup.VulkanSDK` |
+| MSVC 14.44 | `winget install Microsoft.VisualStudio.2022.BuildTools` with `--add Microsoft.VisualStudio.Workload.VCTools` |
+
+The build, against the **same tag as the CUDA binary** (b4938) so the two backends accept
+exactly the same flags:
+
+```bat
+call "...\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+set "VULKAN_SDK=C:\VulkanSDK\1.4.357.0"
+set "PATH=%VULKAN_SDK%\Bin;%PATH%"
+cmake -B build-vulkan -DGGML_VULKAN=1 -DCMAKE_BUILD_TYPE=Release ^
+      -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON
+cmake --build build-vulkan --config Release --target whisper-cli -j 10
+```
+
+Output goes to `build-vulkan\bin\Release\`. Copy `whisper-cli.exe`, `whisper.dll`,
+`ggml*.dll` into `bin\whisper-vulkan\`, **plus `MSVCP140.dll`, `VCRUNTIME140.dll` and
+`VCRUNTIME140_1.dll`** from the Build Tools redist folder. Upstream's prebuilt binaries
+have the same dependency and simply assume the VC++ redistributable is installed; this
+app promises "unzip and double-click", so it carries them. 56 MB in total.
+
+### Verification against CUDA
+
+The real risk was never whether it compiles. It was `--dtw`: BUILD_NOTES §3.2 records
+that flag silently returning `t_dtw: -1` under flash-attention on CUDA, which would have
+destroyed the word-level merge without any visible error. So the test is output equality,
+not "it produced text".
+
+Same 55-second clip, same flags the pipeline actually passes (`-ojf -pp -mc 0 --vad
+--vad-model ... --dtw large.v3.turbo -nfa`), both backends warm:
+
+| | CUDA | Vulkan |
+|---|---|---|
+| Wall time | 3,192 ms | 3,103 ms |
+| Segments / tokens | 7 / 168 | 7 / 168 |
+| Text | — | **identical** |
+| `t_dtw` values | — | **identical, all 168** |
+| `t_dtw >= 0` | 159 | 159 |
+
+`ggml_vulkan: Found 1 Vulkan devices: NVIDIA GeForce RTX 3080 | uma: 0 | fp16: 1 |
+matrix cores: NV_coopmat2`.
+
+**A trap worth recording.** A first attempt measured CUDA at 52 s against Vulkan's 3 s.
+That was not a backend difference — it was `bin\` missing from PATH, so `ggml-cuda.dll`
+could not find `cublas64_12.dll` and whisper fell back to CPU without complaint. Exactly
+the failure `config.child_env()` exists to prevent, reproduced by hand the moment the
+binary was invoked outside the app. Any benchmark of the CUDA build from a plain shell
+is measuring the CPU unless `bin\` is on PATH first.
+
+With this in place, a machine with no NVIDIA card resolves **both** engines to Vulkan;
+verified by simulating an AMD probe.
 
 ## 10. Still not measured
 
