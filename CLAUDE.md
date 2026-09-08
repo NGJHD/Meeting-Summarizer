@@ -13,6 +13,11 @@ silently substitute your own approach.
 
 1. **No internet access at runtime.** Not for models, not for fonts, not for CDN scripts,
    not for telemetry. The app must work with the network adapter physically disabled.
+
+   **One documented exception:** the *Check for updates* button in the About overlay
+   (§13.12). It is the only outbound request the app ever makes, it happens only on a
+   button press, and the whole pipeline still runs with the adapter disabled. Nothing
+   checks on startup, on a timer, or in the background.
 2. **No installation steps.** The end user unzips a folder and double-clicks `run.bat`.
    No Python installer, no CUDA toolkit, no pip.
 3. **No PyTorch.** Anywhere. This is the constraint that shapes the whole architecture.
@@ -157,6 +162,8 @@ MeetingSummariser\
     llm.py                    <- llama-server lifecycle + chat calls
     reduce.py                 <- map / group reduce / final reduce
     jobs.py                   <- job state, cancellation, cleanup
+    version.py                <- app name, author, version, repo. Nothing else
+    updater.py                <- the Check-for-updates button (UPDATE_BUTTON.md)
   temp\                       <- created at runtime, always emptied
   output\
     <meeting name>\           <- one folder per meeting, never loose files
@@ -765,6 +772,16 @@ Single page, no framework, no bundler, no CDN references. Everything served loca
    one restores the finished page with its documents, transcript and naming panel, name
    fields pre-filled from what was applied last time.
 
+12. About overlay — reachable from the header **in every state the app can be in**,
+   including mid-job. Shows built-by, version and the repository, and holds the
+   *Check for updates* button.
+
+   The update flow is `UPDATE_BUTTON.md` §1, with the download, unpack and verify done
+   in Python before anything is replaced, so the batch script only has to wait, copy and
+   restart. Every failure path leaves the installed app exactly as it was, and
+   `config.json` is never overwritten — `load_config` merges new keys in from
+   `_DEFAULTS`, so a stale config loses nothing.
+
 **Reattaching.** Closing the tab must not orphan a job. On load the page asks
 `/api/current` and, if something is running, jumps straight to the progress view and
 attaches to its event stream — which is also the only way back to the Cancel button
@@ -932,7 +949,9 @@ Requirements:
 - Do not add any dependency that pulls in torch, transformers, or the HuggingFace hub
   client. If you find yourself needing one, stop and report it instead.
 - Do not reference any external URL from the frontend — no Google Fonts, no CDN, no
-  favicon fetch.
+  favicon fetch. The repository link in the About overlay is a plain `<a>` the user may
+  click; it loads nothing, so the page still renders identically with no network. The
+  update check itself goes through the server, never from the page.
 - Do not bind the server to anything except `127.0.0.1`.
 - Do not write to `%APPDATA%`, `%USERPROFILE%` or the registry. Everything stays inside
   the app folder so the whole thing is portable and deletable.

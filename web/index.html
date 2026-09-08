@@ -12,7 +12,10 @@
 <main class="shell">
 
   <header class="head">
-    <h1>Meeting Summariser</h1>
+    <div class="head-row">
+      <h1>Meeting Summariser</h1>
+      <button id="about-open" class="btn small ghost" type="button">About</button>
+    </div>
     <p class="sub">Turns a meeting recording into minutes or a summary. Everything runs on this machine.</p>
   </header>
 
@@ -172,6 +175,35 @@
   </section>
 
 </main>
+
+<!-- About lives outside <main> so it is reachable in every state the app can
+     be in, including mid-job and on the finished page (UPDATE_BUTTON.md 7). -->
+<div id="about" class="overlay" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="about-title">
+    <div class="sheet-head">
+      <h2 id="about-title">About</h2>
+      <button id="about-close" class="iconbtn" type="button" aria-label="Close">&times;</button>
+    </div>
+
+    <dl class="about-grid">
+      <dt>Built by</dt><dd id="about-author">&mdash;</dd>
+      <dt>Version</dt><dd id="about-version">&mdash;</dd>
+      <dt>Source</dt><dd><a id="about-repo" href="#" target="_blank" rel="noopener noreferrer">&mdash;</a></dd>
+    </dl>
+
+    <div class="sheet-foot">
+      <button id="update-check" class="btn" type="button">Check for updates</button>
+      <button id="update-install" class="btn primary" type="button" hidden>Update</button>
+      <button id="update-cancel" class="btn" type="button" hidden>Cancel</button>
+    </div>
+
+    <div id="update-bar" class="bar" hidden><div class="bar-fill" id="update-fill"></div></div>
+    <p id="update-msg" class="about-msg" hidden></p>
+    <p class="about-note">Checking for updates is the only thing in this
+      application that uses the internet, and only when you press the button.
+      Everything else runs offline.</p>
+  </div>
+</div>
 
 <script src="/app.js"></script>
 </body>

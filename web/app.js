@@ -862,5 +862,146 @@
     return out.join("\n");
   }
 
+  /* ----------------------------------------------------------- about */
+
+  // The only outbound request the app ever makes lives behind this button.
+  // Everything about the check goes through the server: the page never talks
+  // to an external host, so section 16's rule about the frontend holds.
+
+  var about = { url: "", timer: null };
+
+  function openAbout() {
+    show("about", true);
+    resetUpdate();
+    fetch("/api/about")
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        $("about-author").textContent = d.author || "";
+        $("about-version").textContent = d.version || "";
+        about.url = d.repo_url || "";
+        var link = $("about-repo");
+        link.textContent = (d.repo_url || "").replace(/^https:\/\//, "");
+        link.href = d.repo_url || "#";
+      })
+      .catch(function () { $("about-version").textContent = "unknown"; });
+  }
+
+  function closeAbout() {
+    show("about", false);
+    if (about.timer) { clearInterval(about.timer); about.timer = null; }
+  }
+
+  function resetUpdate() {
+    $("update-install").hidden = true;
+    $("update-cancel").hidden = true;
+    $("update-bar").hidden = true;
+    $("update-msg").hidden = true;
+    $("update-fill").style.width = "0";
+    $("update-check").disabled = false;
+    $("update-check").textContent = "Check for updates";
+  }
+
+  function updateMsg(text) {
+    var el = $("update-msg");
+    el.textContent = text;
+    el.hidden = !text;
+  }
+
+  $("about-open").addEventListener("click", openAbout);
+  $("about-close").addEventListener("click", closeAbout);
+  $("about").addEventListener("click", function (e) {
+    if (e.target === $("about")) closeAbout();      // click the backdrop
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && !$("about").hidden) closeAbout();
+  });
+
+  $("update-check").addEventListener("click", function () {
+    $("update-check").disabled = true;
+    $("update-check").textContent = "Checking…";
+    $("update-install").hidden = true;
+    updateMsg("");
+    fetch("/api/update/check", { method: "POST" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        $("update-check").disabled = false;
+        $("update-check").textContent = "Check for updates";
+        if (d.status !== "available") { updateMsg(d.message || "Nothing to do."); return; }
+        about.pending = d;
+        updateMsg("Version " + d.latest + " is available (" + humanSize(d.size_bytes) + ").");
+        if (d.writable === false) {
+          updateMsg("Version " + d.latest + " is available, but this folder " +
+                    "can't be written to, so it can't be installed here.");
+          return;
+        }
+        $("update-install").hidden = false;
+      })
+      .catch(function () {
+        $("update-check").disabled = false;
+        $("update-check").textContent = "Check for updates";
+        updateMsg("Couldn't reach GitHub. Check the network connection.");
+      });
+  });
+
+  $("update-install").addEventListener("click", function () {
+    var d = about.pending;
+    if (!d) return;
+    $("update-install").hidden = true;
+    $("update-check").disabled = true;
+    $("update-cancel").hidden = false;
+    $("update-bar").hidden = false;
+    fetch("/api/update/install", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: d.url, size_bytes: d.size_bytes, tag: d.latest })
+    })
+      .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
+      .then(function (res) {
+        if (!res.ok) { resetUpdate(); updateMsg(res.body.error || "Couldn't start."); return; }
+        pollUpdate();
+      })
+      .catch(function () { resetUpdate(); updateMsg("Couldn't start the update."); });
+  });
+
+  $("update-cancel").addEventListener("click", function () {
+    fetch("/api/update/cancel", { method: "POST" });
+  });
+
+  function pollUpdate() {
+    if (about.timer) clearInterval(about.timer);
+    about.timer = setInterval(function () {
+      fetch("/api/update/progress")
+        .then(function (r) { return r.json(); })
+        .then(function (p) {
+          // Bytes, not just a percentage: a bare percentage does not tell you
+          // whether it is stuck.
+          if (p.total) {
+            $("update-fill").style.width = (p.downloaded / p.total * 100) + "%";
+            updateMsg(p.message + " — " + humanSize(p.downloaded) +
+                      " of " + humanSize(p.total));
+          } else if (p.message) {
+            updateMsg(p.message);
+          }
+          // Nothing left to abort once the download is done.
+          if (p.phase !== "downloading") $("update-cancel").hidden = true;
+          if (p.phase === "restarting") {
+            clearInterval(about.timer); about.timer = null;
+            $("update-fill").style.width = "100%";
+            updateMsg("Update ready. The application will close and reopen by " +
+                      "itself — this page will reconnect.");
+          } else if (p.phase === "error") {
+            clearInterval(about.timer); about.timer = null;
+            resetUpdate();
+            updateMsg(p.message);
+          } else if (p.phase === "idle") {
+            clearInterval(about.timer); about.timer = null;
+            resetUpdate();
+            updateMsg("Update cancelled. Nothing was changed.");
+          }
+        })
+        .catch(function () { /* the server may already be restarting */ });
+    }, 500);
+  }
+
   waitForServer(0);
 })();

@@ -26,7 +26,7 @@ from fastapi.responses import (
     StreamingResponse,
 )
 
-from . import config, hardware, jobs, merge, pipeline, speakers
+from . import config, hardware, jobs, merge, pipeline, speakers, updater, version
 
 
 @asynccontextmanager
@@ -45,9 +45,12 @@ async def lifespan(_app: FastAPI):
     except OSError as exc:
         jobs.log_exception(exc)
     jobs.install_kill_on_close()
+    # The update script waits for this to disappear before replacing files.
+    updater.mark_running()
     try:
         yield
     finally:
+        updater.clear_running()
         jobs.shutdown_all()
 
 
@@ -176,6 +179,69 @@ async def history_open(request: Request):
         if (config.meeting_dir(name) / ("%s_%s.md" % (name, mode))).exists()
     ]
     return {"job_id": job.id, "meeting": name}
+
+
+@app.get("/api/about")
+async def about() -> dict:
+    """Name, author, version and repository, for the About overlay."""
+    return {
+        "name": version.APP_NAME,
+        "author": version.APP_AUTHOR,
+        "version": version.APP_VERSION,
+        "repo_url": version.REPO_URL,
+    }
+
+
+@app.post("/api/update/check")
+async def update_check() -> dict:
+    """Ask GitHub whether there is a newer release.
+
+    The only outbound request the app ever makes, and only on a button press.
+    Runs on a thread: it is a network call with a 30-second timeout and must
+    not block the event loop serving the progress stream.
+    """
+    return await asyncio.to_thread(updater.check)
+
+
+@app.post("/api/update/install")
+async def update_install(request: Request):
+    """Download, verify and apply an update. Refuses while a job is running."""
+    if jobs.active() is not None:
+        return JSONResponse(
+            {"error": "A recording is still being processed. Let it finish first."},
+            status_code=409,
+        )
+    if updater.state().get("phase") not in ("idle", "error"):
+        return {"ok": True}
+
+    body = await request.json()
+    url = str(body.get("url") or "")
+    tag = str(body.get("tag") or "")
+    if not url.startswith("https://github.com/") and not url.startswith(
+            "https://objects.githubusercontent.com/"):
+        # Only ever fetch from GitHub, and only a URL that came from the
+        # release we just read -- never one supplied by the page.
+        return JSONResponse({"error": "That download location isn't allowed."},
+                            status_code=400)
+
+    port = int(request.url.port or config.load_config()["server"]["port"])
+    threading.Thread(
+        target=updater.install,
+        args=(url, int(body.get("size_bytes") or 0), tag, port),
+        name="updater", daemon=True,
+    ).start()
+    return {"ok": True}
+
+
+@app.get("/api/update/progress")
+async def update_progress() -> dict:
+    return updater.state()
+
+
+@app.post("/api/update/cancel")
+async def update_cancel() -> dict:
+    updater.cancel()
+    return {"ok": True}
 
 
 @app.get("/api/health")
