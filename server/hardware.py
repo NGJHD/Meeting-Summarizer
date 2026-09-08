@@ -323,6 +323,18 @@ def placement(key: str, gpu: dict) -> tuple[str, str]:
 
     Two vendors, opposite hardware, same answer: on unified memory the GPU has
     no bandwidth advantage to offer and the split costs synchronisation.
+
+    Note what `-ngl 0` actually does here, because the name misleads. The
+    weights live in system RAM, but the Vulkan backend stays registered and the
+    scheduler still sends prefill -- the big compute-bound matmuls -- to the
+    GPU. Measured on a dedicated card, same model, prefill only:
+
+        Vulkan build, -ngl 0    40.4 tok/s
+        CPU-only build          16.8 tok/s
+
+    So this is a hybrid, not a retreat to the processor: generation on the CPU
+    where the memory bus decides it, prefill on the GPU where compute does.
+    That is why it wins on both counts.
     """
     if gpu.get("uma"):
         return "0", ""
