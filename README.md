@@ -15,8 +15,11 @@ tagged with the speaker names.
 
 ## Using it
 
-1. Download and unzip the release
+1. Download **`Meeting-Summariser-vX.Y.Z-full.zip`** from the latest release and unzip it
 2. Double click on `DOWNLOAD_MODELS.bat`
+
+The full zip carries the app, the Python runtime and every inference binary, so step 2
+only has to fetch the models. It needs internet access; nothing after it does.
 
 After that, you can just copy the entire folder (about 30GB with the models) to other machines and it should work.
 
@@ -79,18 +82,27 @@ fetched by `DOWNLOAD_MODELS.bat` or copied with the release.
 
 ## Releases
 
-A release zip contains the **source tree only**, not the 30 GB of models and binaries. The
-in-app *Check for updates* button downloads it and replaces the code in place, leaving
-`bin/`, `models/`, `runtime/` and your `config.json` untouched.
+Each release carries two zips, and they are not variants of the same thing.
 
-For a first install: clone or download the source, then run `DOWNLOAD_MODELS.bat` once on
-a machine with internet access and copy the whole folder to the offline machine.
+| Asset | Size | For |
+|---|---|---|
+| `Meeting-Summariser-vX.Y.Z-full.zip` | ~1.1 GB | **A first install.** Everything except the models: the app, the Python runtime, ffmpeg and every inference binary — the exact set that was tested |
+| `Meeting-Summariser-vX.Y.Z.zip` | ~190 KB | The update payload — what *Check for updates* downloads |
 
-`DOWNLOAD_MODELS.bat` fetches everything, including `bin\whisper-vulkan\`. That one is
-the odd case: whisper.cpp publishes no Vulkan build for Windows, so it is built from
-source and hosted on this repository's releases rather than expecting anyone to install a
-C++ toolchain. However if you want to build the whisper vulkan yourself, the build recipe 
-and its verification against the CUDA binary are in `BUILD_NOTES.md`.
+The models are never release assets: two of them are individually larger than GitHub's
+2 GB per-asset limit, so `DOWNLOAD_MODELS.bat` is the only way to get those.
+
+*About → Check for updates* takes the small zip and replaces the code in place, leaving
+`bin/`, `models/`, `runtime/` and your `config.json` alone. It deliberately never takes
+the full bundle — that would turn a 190 KB update into 1.1 GB, and it would overwrite
+`runtime\python.exe`, the interpreter the running app is executing from.
+
+If you cloned the source rather than taking the full zip, `DOWNLOAD_MODELS.bat` fetches
+the runtime, ffmpeg and the binaries too. One of them is this project's own:
+whisper.cpp publishes no Vulkan build for Windows, so `bin\whisper-vulkan\` is built
+from source and hosted on this repository's releases rather than expecting anyone to
+install a C++ toolchain. If you would rather build it yourself, the recipe and its
+verification against the CUDA binary are in `BUILD_NOTES.md`.
 
 ## Documentation
 

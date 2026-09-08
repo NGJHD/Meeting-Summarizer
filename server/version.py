@@ -13,11 +13,21 @@ import re
 
 APP_NAME = "Meeting Summariser"
 APP_AUTHOR = "Darren Ng"
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.2"
 
 GITHUB_REPO = "NGJHD/Meeting-Summarizer"
 REPO_URL = "https://github.com/%s" % GITHUB_REPO
 RELEASES_API = "https://api.github.com/repos/%s/releases/latest" % GITHUB_REPO
+
+# A release carries two zips: the small source tree, which is what the updater
+# downloads, and a full bundle that also contains `runtime\` and `bin\` for a
+# first install. This marker tells them apart.
+#
+# The updater must never take the full one. It would turn a 190 KB update into
+# 1.14 GB, and -- far worse -- it would robocopy `runtime\python.exe` over the
+# interpreter the running app is executing from. A half-copied interpreter
+# cannot start, so it cannot self-repair.
+FULL_ASSET_MARKER = "-full"
 
 # Files the update zip must contain before it is believed to be this app.
 EXPECTED_FILES = ("run.bat", "server/main.py", "server/version.py", "web/index.html")
@@ -51,12 +61,19 @@ def is_newer(candidate: str, current: str = APP_VERSION) -> bool:
 
 
 def pick_asset(assets: list) -> dict | None:
-    """The one .zip attached to the release. Nothing else is looked at."""
+    """The source zip attached to the release -- the update payload.
+
+    Anything carrying FULL_ASSET_MARKER is a first-install bundle and is
+    skipped. A release from before that split had a single zip and still
+    resolves. Any other ambiguity is refused rather than guessed at: offering
+    the wrong asset would overwrite an install with something unintended.
+    """
     zips = [a for a in (assets or [])
             if str(a.get("name", "")).lower().endswith(".zip")
             and a.get("browser_download_url")]
-    if len(zips) != 1:
-        # Zero is a release with nothing to install; more than one is an
-        # ambiguity this deliberately refuses to guess at.
-        return zips[0] if len(zips) == 1 else None
-    return zips[0]
+    updates = [a for a in zips
+               if FULL_ASSET_MARKER not in str(a.get("name", "")).lower()]
+    # Exactly one candidate or nothing. A release carrying only a full bundle
+    # yields no update rather than the dangerous one -- "nothing to install" is
+    # the correct answer there, not "install the 1.14 GB one".
+    return updates[0] if len(updates) == 1 else None

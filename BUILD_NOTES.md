@@ -2221,6 +2221,63 @@ downloads from. The API already reported the new size while the CDN did not. So 
 change gets a new version number, which is why this went out as v1.0.1 rather than another
 clobber.
 
+## 9s. Two release assets, and why the updater must not take the big one
+
+The instinct to ship the proven binaries rather than re-download them is right, and the
+earlier reasoning against it was partly wrong. Measured:
+
+| | zipped |
+|---|---|
+| `runtime\` + `bin\ffmpeg.exe` + `bin\whisper-vulkan\` | 159 MB |
+| `runtime\` + all of `bin\` | **1.14 GB** |
+| GitHub per-asset limit | 2 GB |
+
+So size was never the obstacle for the binaries, and neither was licensing -- everything
+in there is MIT, BSD, Apache, PSF or LGPL, all redistributable. **Only the models are
+impossible:** `Qwen3.8-27B-UD-Q4_K_M.gguf` is 16.5 GB and `IQ3_XXS` is 10.9 GB, each on
+its own over the 2 GB limit, so they can never be release assets whatever the packaging.
+
+A release therefore carries two zips, built by `tools/make_release.py`:
+
+- `Meeting-Summariser-vX.Y.Z-full.zip` (~1.14 GB) -- a first install. Unzip it and only
+  the models remain to download.
+- `Meeting-Summariser-vX.Y.Z.zip` (~190 KB) -- the update payload.
+
+### The updater must never take the full one
+
+Two reasons, and the second is the real one:
+
+1. A 190 KB update would become 1.14 GB, to ship a few changed `.py` files.
+2. It would robocopy `runtime\python.exe` over the interpreter the running app is
+   executing from. `run.bat` launches `runtime\python.exe -m uvicorn`, and Windows locks
+   a running executable's image. A half-copied interpreter cannot start, so it cannot
+   self-repair -- there is no recovery path from that.
+
+There is a specific race that makes (2) worse than it looks. `updater._quit()` clears the
+`running.lock` marker *before* `os._exit(0)`, so the batch script can begin copying while
+the process is still exiting and holding its own image open. Harmless today because the
+payload is only `.py`, `.js` and `.md`; fatal if the interpreter were in it.
+
+`version.pick_asset` therefore skips any asset carrying `-full`, and **refuses rather
+than guesses** when that leaves no candidate -- a release with only a full bundle yields
+"nothing to install", not "install the 1.14 GB one". Exercised against seven asset layouts
+including both orderings, the single-zip releases v1.0.0 and v1.0.1, and the ambiguous
+two-zip case.
+
+### The bundle caught a licensing error
+
+Building it revealed that `bin\ffmpeg.exe` on the development machine was still the
+**GPLv3** build. §9r had switched `DOWNLOAD_MODELS.bat` to the LGPL variant, but the local
+copy was never replaced -- the LGPL build had only ever been tested in a scratch folder.
+The full bundle would have shipped a GPLv3 ffmpeg alongside a `THIRD_PARTY_NOTICES.md`
+claiming LGPL v3.
+
+Replaced and re-verified from inside the finished zip: `--enable-gpl` absent,
+`--enable-version3` present. Worth remembering that a licence file is a claim about an
+artefact, and only checking the artefact tests it.
+
+---
+
 ## 10. Still not measured
 
 - Tokens/second during real map calls on the target hardware.

@@ -27,7 +27,12 @@ update.log
 .write-probe-*
 
 # ---- development only, not shipped --------------------------------------
-tools/
+# `tools/` is a scratch area holding test audio and one-off comparison scripts.
+# The exception is the release builder: it has to be in the repository for a
+# release to be reproducible. It is still kept out of both zips -- see the
+# EXCLUDE_PREFIXES filter in it.
+tools/*
+!tools/make_release.py
 work/
 
 # ---- editor / OS noise ---------------------------------------------------
