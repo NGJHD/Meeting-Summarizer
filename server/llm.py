@@ -90,13 +90,14 @@ class LlamaServer:
 
     # -- lifecycle -------------------------------------------------------
 
-    def resolve_model(self) -> tuple[Path, str]:
-        """Return (weights path, offload regex), honouring "auto" for both.
+    def resolve_model(self) -> tuple[Path, str, str]:
+        """Return (weights path, gpu_layers, offload regex).
 
-        "auto" means: pick the quantisation this card can actually hold, and
-        offload only the excess. A fixed regex written for one card is wrong on
-        every other one (BUILD_NOTES §9j), so both are computed unless the
-        operator has pinned them in config.json.
+        "auto" means: pick the quantisation this machine can actually hold, and
+        then get out of llama.cpp's way. It fits the model to free device
+        memory itself and does that better than we can -- the exception being
+        a unified-memory GPU, where the figure it fits against is a fiction
+        (hardware.gpu_layers_for).
         """
         from . import hardware
 
@@ -105,39 +106,48 @@ class LlamaServer:
         if getattr(self, "_resolved", None) is not None:
             return self._resolved
 
+        layers = str(self.llm.get("gpu_layers", "auto"))
+        regex = str(self.llm.get("cpu_ffn_regex") or "")
+
         requested = self.job.model_key or self.llm.get("model") or "auto"
         if requested not in hardware.BY_KEY and requested not in ("auto", ""):
             # An explicit path in config.json still wins.
-            path = config.resolve(requested)
-            regex = self.llm.get("cpu_ffn_regex") or ""
-            self._resolved = (path, "" if regex == "auto" else regex)
+            self._resolved = (config.resolve(requested),
+                              "" if layers == "auto" else layers,
+                              "" if regex == "auto" else regex)
             return self._resolved
 
-        vram = hardware.detect_vram_mb()
-        key = hardware.resolve_key(requested, vram)
+        gpu = hardware.detect_gpu()
+        key = hardware.resolve_key(requested, gpu["vram_mb"])
         path = hardware.model_path(key)
-        regex = self.llm.get("cpu_ffn_regex")
-        if regex == "auto" or regex is None:
-            regex = hardware.offload_regex(key, vram)
+        auto_layers, auto_regex = hardware.placement(key, gpu)
+        if layers == "auto":
+            layers = auto_layers
+        if regex == "auto":
+            regex = auto_regex
+
+        placement = ("llama.cpp decides" if layers == ""
+                     else "on the processor" if layers == "0"
+                     else "%d FFN blocks to system RAM" % (regex.count("|") + 1)
+                     if regex else "fully on the GPU")
         self.job.log(
-            "llm: %s | %d MiB VRAM | %s"
-            % (path.name, vram,
-               ("%d layers to CPU" % (regex.count("|") + 1)) if regex else "fully on GPU")
+            "llm: %s | %s via %s (%d MiB%s) | %s"
+            % (path.name, gpu["device"], config.backend("llama"), gpu["vram_mb"],
+               ", unified memory" if gpu.get("uma") else "", placement)
         )
         # Record what was actually chosen. Calibration is keyed by model, and a
         # job that never went through the dropdown -- one reopened from the
         # history list, say -- would otherwise be timed against the wrong one.
         self.job.model_key = key
-        self._resolved = (path, regex)
+        self._resolved = (path, layers, regex)
         return self._resolved
 
     def command(self) -> list[str]:
-        model, _regex = self.resolve_model()
+        model, layers, regex = self.resolve_model()
         cmd = [
             str(config.LLAMA_SERVER),
             "-m", str(model),
             "--ctx-size", str(int(self.llm.get("ctx_size", 32768))),
-            "--n-gpu-layers", str(int(self.llm.get("gpu_layers", 99))),
             "--flash-attn", "on",
             "--cache-type-k", str(self.llm.get("cache_type_k", "q8_0")),
             "--cache-type-v", str(self.llm.get("cache_type_v", "q8_0")),
@@ -148,15 +158,24 @@ class LlamaServer:
             "--host", "127.0.0.1", "--port", str(self.port),
             "--no-webui",
         ]
-        if _regex:
-            # A 27B model does not fit alongside a 32k KV cache on a small
-            # card. This pushes the upper FFN tensors into system RAM and keeps
-            # attention on the GPU; how many layers is computed for this card.
-            cmd += ["--override-tensor", _regex]
+        # No --n-gpu-layers unless we have a reason. Section 11.1 specified
+        # `-ngl 99` plus a hand-written --override-tensor; both are withdrawn.
+        # llama.cpp now fits the model to free device memory on its own, and
+        # passing -ngl at all makes it give up and do as it is told:
+        #
+        #   common_fit_params: failed to fit params to free device memory:
+        #   n_gpu_layers already set by user to 99, abort
+        if layers:
+            cmd += ["--n-gpu-layers", layers]
+        if regex:
+            # Keep attention on the GPU and push the upper blocks' FFN tensors
+            # into system RAM. Measured 2.4x faster than letting llama.cpp fit
+            # whole layers, at identical VRAM -- see hardware.placement.
+            cmd += ["--override-tensor", regex]
         return cmd
 
     def start(self) -> None:
-        model, _ = self.resolve_model()
+        model, _layers, _regex = self.resolve_model()
         if not model.exists():
             raise JobError(LLM_FAILED, "model file missing: %s" % model)
 

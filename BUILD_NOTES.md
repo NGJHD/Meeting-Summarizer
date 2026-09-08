@@ -1838,6 +1838,120 @@ is measuring the CPU unless `bin\` is on PATH first.
 With this in place, a machine with no NVIDIA card resolves **both** engines to Vulkan;
 verified by simulating an AMD probe.
 
+## 9p. The AMD desktop: two bugs, one wrong diagnosis, and a knob worth keeping
+
+A Radeon 780M desktop failed at transcription. Working it out took four rounds of
+diagnostics and produced two real bugs, one performance finding that reversed a change
+mid-flight, and one wrong conclusion I had to withdraw.
+
+### Wrong turn worth recording
+
+The failure log ended with `whisper_backend_init_gpu: no GPU found`, and I concluded the
+app had selected a non-Vulkan whisper binary. It had not. That line is printed by the
+**VAD context**, which is CPU-only, and it appears on every successful GPU run too --
+verified here at line 66 of a run whose line 30 reads `using Vulkan0 backend`. It was
+simply the first line to survive the 60-line stderr tail.
+
+Two lessons, both now fixed elsewhere: `transcribe.py` logged `" ".join(cmd[1:])`, which
+drops the exe path, so the log could not say which binary ran; and `_tail_lines(..., 60)`
+threw away the evidence that would have settled it in one round.
+
+### Bug 1: KHR_coopmat hard-crashes on the AMD proprietary driver
+
+whisper-cli dies at the first encoder call with exit `0xC0000409` -- `__fastfail`, no
+message, no `GGML_ASSERT`. An uncaught vulkan-hpp exception reaching `std::terminate`.
+
+Isolated by ladder. Step 1 -- no VAD, no DTW, flash attention on -- already crashed, so
+none of our flags were implicated:
+
+| Run | `matrix cores` | Result |
+|---|---|---|
+| bare minimum | `KHR_coopmat` | crash at first encode |
+| VAD, no DTW | `KHR_coopmat` | crash at first encode |
+| **full flag set**, `GGML_VK_DISABLE_COOPMAT=1` | `none` | **success, 17.5 s** |
+
+The device differs from the development NVIDIA card in every dimension that selects a
+shader path: `KHR_coopmat` against `NV_coopmat2`, subgroup 64 against 32, 32 KB of shared
+memory against 48 KB, and `uma: 1`.
+
+`config.child_env()` now sets the variable for AMD on Vulkan. ggml tests it with
+`getenv`, so it is existence, not value -- setting it to `0` also disables coopmat.
+
+### Bug 2: unified memory advertises VRAM it will not allocate
+
+```
+Vulkan0: AMD Radeon 780M Graphics (18065 MiB, 17161 MiB free)
+```
+
+18 GB of a 32 GB machine. The real ceiling is 15 of 64 layers -- roughly 3.5 GB, matching
+the BIOS carve-out. Above that: silent exit at 16, `vk::Queue::submit:
+ErrorOutOfDeviceMemory` at 32.
+
+`-ngl auto` does not help, and this is the important part: llama.cpp's own fitting reads
+the same reported free memory, believes the 18 GB, and fails identically. It is not
+probing what can be allocated.
+
+`GGML_VK_ALLOW_SYSMEM_FALLBACK` does not help either -- ggml takes a separate branch on
+UMA that already prefers host-visible memory and never consults the flag.
+
+So the advertised figure is untrustworthy on any UMA device, and `choose_key()` now
+refuses the 16.5 GB model there regardless of what it claims. Without that, this machine
+would have selected Q4_K_M -- 18065 clears the 15000 threshold -- with zero offload,
+because the deficit computes negative.
+
+### A change made, then reversed by measurement
+
+Having found that `-ngl 99` defeats llama.cpp's auto-fit, I removed both it and
+`--override-tensor` in favour of letting llama.cpp decide. Benchmarking that on the 10 GB
+development card, same VRAM occupied either way:
+
+| | generation |
+|---|---|
+| llama.cpp auto-fit | 2.63 tok/s |
+| `-ngl 99` + FFN `--override-tensor` | **6.23 tok/s** |
+
+2.4x in favour of the thing I had just deleted, because the FFN split keeps attention
+resident and whole-layer placement does not. Restored from the previous commit. Section
+11.1's approach was right; only its hard-coded regex was wrong, and that was already
+computed per machine.
+
+The UMA case is the mirror image, measured on the 780M:
+
+```
+-ngl 0     prompt 33.8 tok/s   generation 3.15 tok/s
+-ngl 15    prompt 21.6 tok/s   generation 3.05 tok/s
+```
+
+Generation identical, prompt processing a third slower with the GPU involved. So
+`placement()` has two regimes and no middle ground: FFN split on a dedicated card, the
+processor on AMD unified memory.
+
+Scoped to AMD, not to UMA generally. Both UMA measurements come from one device, and the
+Intel iGPU laptop is reported working -- "it works today" outranks an argument by analogy,
+so Intel keeps the FFN split until somebody benchmarks it.
+
+### Latency the investigation exposed
+
+Timing the cancel path found that detection -- which now spawns up to two llama.cpp probes
+with 60-second timeouts on a machine without nvidia-smi -- is reachable from
+`jobs.remaining_seconds()`, which runs inside `_status()` **on the event loop**. A first
+call arriving there would have stalled every request, Cancel included. Now primed on a
+background thread at startup, and the probe itself is serialised behind a lock so
+concurrent callers cannot each spawn it.
+
+`calibration.json` was also being re-read from disk on every progress event -- every 25
+generated tokens -- and is now cached against its mtime.
+
+Measured after: **cancel during generation, POST to the SSE `cancelled` event reaching
+the client, 0.37 s.**
+
+### Calibration had to learn about backends
+
+Records were keyed by model alone, so a CUDA run's tokens-per-second would have been
+applied to a Vulkan or CPU run -- a difference of an order of magnitude. The key is now
+`model@backend`; records written before this are never matched, which is correct, as they
+describe an unknown machine.
+
 ## 10. Still not measured
 
 - Tokens/second during real map calls on the target hardware.

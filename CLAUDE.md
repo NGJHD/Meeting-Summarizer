@@ -141,6 +141,25 @@ to start and far harder to diagnose than choosing the CPU build outright.
 
 `gpu.backend` in `config.json` is `"auto"`; `"cuda"` / `"vulkan"` / `"cpu"` pin it.
 
+### 2.2 Two vendor quirks, both measured
+
+**AMD on Vulkan must have `GGML_VK_DISABLE_COOPMAT=1`.** ggml's `KHR_coopmat`
+path hard-crashes on the AMD proprietary Windows driver: whisper-cli dies at the
+first encoder call with exit `0xC0000409`, a `__fastfail` with no message and
+nothing in the log, because it is an uncaught vulkan-hpp exception. There is
+nothing to catch and no way to degrade. With the variable set, the identical
+command completes. `config.child_env()` sets it for AMD only -- NVIDIA takes the
+separate `NV_coopmat2` path this flag does not touch, and Intel works as shipped.
+
+**A unified-memory GPU's advertised VRAM is a fiction.** A Radeon 780M reports
+18065 MiB of a 32 GB machine and refuses to allocate much past 4 GB. Both our own
+arithmetic and llama.cpp's `-ngl auto` size against that number and fail with
+`vk::Queue::submit: ErrorOutOfDeviceMemory`. So on unified memory:
+
+- **never** the large model, whatever it advertises (`choose_key`);
+- **no GPU offload at all** on AMD (`placement`), because it is measured slower
+  than the processor -- see §11.1.
+
 **Language: Python.** A standalone relocatable CPython runtime with vendored pure-Python
 wheels. Frontend is plain HTML/CSS/JS with no build step and no npm.
 
@@ -568,6 +587,41 @@ FFN tensors of the upper layers into system RAM while keeping attention on the G
 preferred over dropping to a 3-bit quant because summaries live or die on getting names,
 figures and dates exactly right, and sub-4-bit quants are where models begin mangling
 proper nouns and digits.
+
+**Both are computed per machine, not hard-coded, and are skipped on unified
+memory.** The regex above was written for one 16 GB card and is wrong on every
+other. `hardware.placement()` decides:
+
+| Machine | `--n-gpu-layers` | `--override-tensor` |
+|---|---|---|
+| Dedicated GPU | `99` | FFN blocks that do not fit, computed from measured VRAM |
+| AMD unified memory | `0` | none |
+
+Keeping the FFN split on a dedicated card is measured, not assumed. On a 10 GB
+card with the 10.9 GB model, at identical VRAM occupancy:
+
+```
+llama.cpp -ngl auto (fits whole layers)   2.63 tok/s
+-ngl 99 + FFN override-tensor             6.23 tok/s
+```
+
+2.4x, because the split keeps attention -- the bandwidth-sensitive half -- on the
+GPU. Note that passing `-ngl` at all makes llama.cpp abandon its own fitting
+(`common_fit_params: ... already set by user to 99, abort`); here that is the
+intended outcome.
+
+On unified memory the opposite holds, and just as firmly. Measured on a Radeon
+780M with the 27B at IQ3_XXS:
+
+```
+-ngl 0     prompt 33.8 tok/s   generation 3.15 tok/s
+-ngl 15    prompt 21.6 tok/s   generation 3.05 tok/s
+```
+
+Generation unchanged -- an integrated GPU shares the CPU's memory bus, so a
+bandwidth-bound workload gains nothing -- and prompt processing a third *slower*,
+because every batch is copied across for a handful of resident layers. So the
+processor, and no offload flags at all.
 
 **The regex is a starting point, not a tuned value.** After the first successful run,
 report peak VRAM. If there is headroom, move layers back to GPU; if it OOMs, move more to

@@ -54,6 +54,24 @@ _LLM_RATES = {
 DEFAULT_MODEL = "q4_k_m"
 
 
+def _key(model_key: str = "") -> str:
+    """The identity a timing record is filed under: model *and* backend.
+
+    Generation speed depends on both. The same model on CUDA, on Vulkan and on
+    the processor differs by an order of magnitude, so applying a CUDA run's
+    tokens-per-second to a CPU run would make the estimate meaningless. Records
+    written before backends existed carry a bare model key and are simply never
+    matched, which is the correct outcome -- they describe an unknown machine.
+    """
+    from . import config
+
+    try:
+        backend = config.backend("llama")
+    except Exception:  # noqa: BLE001 - never let calibration break a job
+        backend = "cuda"
+    return "%s@%s" % (model_key or DEFAULT_MODEL, backend)
+
+
 def default_rates(model_key: str = "") -> dict:
     llm = _LLM_RATES.get(model_key or DEFAULT_MODEL, _LLM_RATES[DEFAULT_MODEL])
     return {**_SHARED_RATES, **llm}
@@ -68,7 +86,29 @@ MIN_WEIGHT = 1.0
 _lock = threading.Lock()
 
 
+_load_cache: dict = {"mtime": -1.0, "data": None}
+
+
 def _load() -> dict:
+    """Read calibration.json, cached against its modification time.
+
+    The progress bar asks for a call profile every 25 generated tokens, and the
+    ETA asks again on every status event. Re-parsing the file each time is
+    pointless disk work on the event loop; the mtime check keeps it honest when
+    a run writes new records.
+    """
+    try:
+        mtime = CALIBRATION_PATH.stat().st_mtime
+    except OSError:
+        mtime = -1.0
+    if _load_cache["data"] is not None and _load_cache["mtime"] == mtime:
+        return _load_cache["data"]
+    data = _read()
+    _load_cache.update(mtime=mtime, data=data)
+    return data
+
+
+def _read() -> dict:
     try:
         with open(CALIBRATION_PATH, "r", encoding="utf-8") as fh:
             data = json.load(fh)
@@ -98,7 +138,8 @@ def rates(model_key: str = "") -> tuple[dict, bool]:
     data = _load()
     runs = [r for r in data["runs"] if r.get("audio_hours", 0) > 0.05]
     if model_key:
-        same = [r for r in runs if r.get("model") == model_key]
+        wanted = _key(model_key)
+        same = [r for r in runs if r.get("model") == wanted]
         # Stages before the LLM do not depend on the model, so fall back to all
         # runs for those rather than discarding them.
         runs = same or []
@@ -127,7 +168,7 @@ def record(stage_seconds: dict, audio_seconds: float, mode: str,
     entry = {
         "audio_hours": round(hours, 4),
         "mode": mode,
-        "model": model_key or DEFAULT_MODEL,
+        "model": _key(model_key),
         "rates": {k: round(v / hours, 2) for k, v in stage_seconds.items()},
     }
     with _lock:
@@ -136,6 +177,7 @@ def record(stage_seconds: dict, audio_seconds: float, mode: str,
         data["runs"] = data["runs"][-MAX_RECORDS:]
         try:
             CALIBRATION_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            _load_cache["data"] = None      # force a re-read next time
         except OSError:
             pass          # a read-only folder must not fail a finished job
 
@@ -284,9 +326,10 @@ MAX_CALL_RECORDS = 80
 
 
 def _calls_for(stage: str, model_key: str) -> list:
+    wanted = _key(model_key) if model_key else ""
     return [c for c in _load().get("calls", [])
             if c.get("stage") == stage and float(c.get("seconds") or 0) > 1
-            and (not model_key or c.get("model") == model_key)]
+            and (not wanted or c.get("model") == wanted)]
 
 
 def has_llm_profile(model_key: str = "", stages=("map", "reduce")) -> bool:
@@ -387,7 +430,7 @@ def record_call(stage: str, tokens: float, seconds: float,
             calls = []
         calls.append({
             "stage": stage,
-            "model": model_key or DEFAULT_MODEL,
+            "model": _key(model_key),
             "run": run_id,
             "audio_h": round(float(audio_hours), 3),
             "tokens": round(float(tokens), 1),
@@ -396,5 +439,6 @@ def record_call(stage: str, tokens: float, seconds: float,
         data["calls"] = calls[-MAX_CALL_RECORDS:]
         try:
             CALIBRATION_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            _load_cache["data"] = None      # force a re-read next time
         except OSError:
             pass

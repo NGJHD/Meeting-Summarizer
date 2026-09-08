@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import threading
 
 from . import config
 
@@ -73,6 +74,7 @@ BY_KEY = {m["key"]: m for m in MODELS}
 BACKENDS = ("cuda", "vulkan", "cpu")
 
 _probe_cache: dict = {}
+_probe_lock = threading.Lock()
 
 
 def _run(cmd: list, timeout: int = 20) -> str:
@@ -118,47 +120,114 @@ def _vulkan_devices() -> list:
     return found
 
 
+def _vulkan_banner() -> dict:
+    """`uma` and the matrix-core extension, from ggml's own device banner.
+
+        ggml_vulkan: 0 = AMD Radeon 780M Graphics (AMD proprietary driver)
+                       | uma: 1 | fp16: 1 | ... | matrix cores: KHR_coopmat
+
+    `--list-devices` reports memory but not these. llama-bench prints the full
+    banner and then exits immediately when the model path does not exist, so
+    this costs well under a second and loads nothing.
+    """
+    exe = config.engine_dir("llama", "vulkan") / "llama-bench.exe"
+    if not exe.exists():
+        return {}
+    out = _run([str(exe), "-m", "__probe_no_such_model__.gguf",
+                "-p", "1", "-n", "1", "-r", "1"], timeout=60)
+    m = re.search(r"ggml_vulkan:\s*\d+\s*=\s*(.+?)\s*\|\s*uma:\s*(\d)", out)
+    if not m:
+        return {}
+    cores = re.search(r"matrix cores:\s*(\S+)", out)
+    return {
+        "device": m.group(1).strip(),
+        "uma": m.group(2) == "1",
+        "matrix_cores": cores.group(1) if cores else "",
+    }
+
+
 def detect_gpu() -> dict:
     """What is in this machine and which backend to use.
 
-    Cached: it shells out to nvidia-smi and llama-server, and it is asked for
-    on every page load.
+    Cached: it shells out to nvidia-smi and llama.cpp, and it is asked for on
+    every page load.
     """
     if _probe_cache:
         return dict(_probe_cache)
 
+    # Serialised. Two threads arriving together would otherwise each spawn the
+    # whole probe -- and on a machine with no nvidia-smi that is two subprocess
+    # calls with 60-second timeouts apiece.
+    with _probe_lock:
+        if _probe_cache:
+            return dict(_probe_cache)
+        return _probe()
+
+
+def _probe() -> dict:
     vram = _nvidia_vram_mb()
     if vram > 0:
         info = {"vendor": "nvidia", "backend": "cuda", "vram_mb": vram,
-                "device": "NVIDIA GPU"}
+                "device": "NVIDIA GPU", "uma": False, "matrix_cores": ""}
     else:
         devices = _vulkan_devices()
         if devices:
             name, mib = max(devices, key=lambda d: d[1])
+            banner = _vulkan_banner()
+            name = banner.get("device") or name
             lower = name.lower()
             vendor = ("amd" if any(k in lower for k in ("amd", "radeon", "gfx"))
                       else "intel" if "intel" in lower
                       else "nvidia" if "nvidia" in lower
                       else "other")
             info = {"vendor": vendor, "backend": "vulkan", "vram_mb": mib,
-                    "device": name}
+                    "device": name, "uma": bool(banner.get("uma")),
+                    "matrix_cores": banner.get("matrix_cores", "")}
         else:
             info = {"vendor": "none", "backend": "cpu", "vram_mb": 0,
-                    "device": "no GPU detected"}
+                    "device": "no GPU detected", "uma": False,
+                    "matrix_cores": ""}
 
     _probe_cache.update(info)
     return dict(info)
 
 
+def probed() -> bool:
+    """True once detect_gpu has run. Lets child_env avoid triggering it.
+
+    The probe spawns children itself, and those children ask for the child
+    environment -- consulting detection from inside child_env() without this
+    guard is an infinite recursion.
+    """
+    return bool(_probe_cache)
+
+
+def needs_coopmat_workaround() -> bool:
+    """AMD on Vulkan hard-crashes in the KHR_coopmat path.
+
+    Measured on a Radeon 780M with the AMD proprietary Windows driver:
+    whisper-cli dies at the first encoder call with exit 0xC0000409 -- a
+    __fastfail, no message, nothing in the log. It is an uncaught vulkan-hpp
+    exception, so there is no error to catch and no way to degrade gracefully.
+    With GGML_VK_DISABLE_COOPMAT set, the identical command completes in 17s.
+
+    Scoped to AMD deliberately. NVIDIA takes the separate NV_coopmat2 path
+    which this flag does not touch, and Intel's Vulkan path works as shipped --
+    turning matrix cores off there would cost performance to fix nothing.
+    """
+    if not _probe_cache:
+        return False
+    return (_probe_cache.get("vendor") == "amd"
+            and _probe_cache.get("backend") == "vulkan")
+
+
 def _first_available(preferred: str, engine: str) -> str:
     """Fall back down the chain rather than launching something absent.
 
-    Resolved **per engine**, because the two are not shipped in step. There is
-    no prebuilt Vulkan whisper.cpp anywhere upstream -- it has to be built from
-    source -- so until that build exists, an AMD or Intel machine should still
-    run the LLM on Vulkan and let transcription fall back to CPU. The LLM is
-    80-95% of the wall time, so that is most of the benefit for none of the
-    build effort.
+    Resolved **per engine**, because the two are not shipped in step. If a
+    Vulkan whisper build is ever missing from a folder, a non-NVIDIA machine
+    should still run the LLM on Vulkan and let transcription fall back to the
+    CPU build rather than failing outright.
     """
     resolver = (config.llama_server_path if engine == "llama"
                 else config.whisper_cli_path)
@@ -188,8 +257,61 @@ def detect_vram_mb() -> int:
     return detect_gpu()["vram_mb"]
 
 
+def placement(key: str, gpu: dict) -> tuple[str, str]:
+    """(--n-gpu-layers, --override-tensor) for this model on this machine.
+
+    Two regimes, both measured rather than reasoned about.
+
+    **Dedicated GPU: keep the FFN split.** Section 11.1's approach -- everything
+    nominally on the GPU, then push the upper blocks' FFN tensors into system
+    RAM -- beats letting llama.cpp fit whole layers, because it keeps attention
+    (the bandwidth-sensitive half) resident. Measured on a 10 GB card with a
+    10.9 GB model, same VRAM occupied either way:
+
+        llama.cpp auto-fit          2.63 tok/s
+        -ngl 99 + FFN override      6.23 tok/s
+
+    2.4x, so the hand-computed regex stays. It is only ever wrong about *how
+    much* to offload, and the VRAM figure it works from is trustworthy here.
+
+    **Unified memory: do not offload at all.** The VRAM figure is a fiction --
+    a Radeon 780M advertises 18 GB of a 32 GB machine and refuses to allocate
+    past about 4 -- so both auto-fit and our own arithmetic size against a
+    number that does not exist, and llama-server dies with
+    `vk::Queue::submit: ErrorOutOfDeviceMemory`. Even where it fits there is
+    nothing to win, because an integrated GPU shares the CPU's memory bus:
+
+        -ngl 0     prompt 33.8 tok/s   generation 3.15 tok/s
+        -ngl 15    prompt 21.6 tok/s   generation 3.05 tok/s
+
+    Generation unchanged, prompt processing a third slower. So: the processor.
+
+    Scoped to AMD, not to unified memory in general. Both measurements above
+    are from one Radeon 780M. An Intel integrated GPU is a different driver
+    with different matrix hardware, and the one we have reports is working --
+    so it keeps the FFN split until somebody benchmarks it, on the principle
+    that "it works today" outranks an argument by analogy.
+    """
+    if gpu.get("uma") and gpu.get("vendor") == "amd":
+        return "0", ""
+    return "99", offload_regex(key, gpu["vram_mb"])
+
+
 def choose_key(vram_mb: int) -> str:
-    """The model this machine should use by default."""
+    """The model this machine should use by default.
+
+    A unified-memory GPU never gets the large one, whatever it advertises. The
+    figure is a share of system RAM rather than a budget: a Radeon 780M reports
+    18 GB on a 32 GB machine, which clears the 15 GB threshold and would select
+    the 16.5 GB model -- on a device that will not allocate 4. It also runs on
+    the CPU there (see gpu_layers_for), where the smaller model is roughly
+    twice as fast and leaves the machine usable.
+    """
+    if detect_gpu().get("uma"):
+        return MODELS[-1]["key"]
+    # Unlike placement(), this applies to every unified-memory device, not just
+    # AMD: whatever a shared-memory GPU advertises, a 16.5 GB model in RAM the
+    # operating system is also using is the wrong choice on any of them.
     for model in MODELS:
         if vram_mb >= model["min_vram_mb"]:
             return model["key"]

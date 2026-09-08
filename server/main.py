@@ -29,6 +29,15 @@ from fastapi.responses import (
 from . import config, hardware, jobs, merge, pipeline, speakers, updater, version
 
 
+def _prime_hardware() -> None:
+    try:
+        hardware.detect_gpu()
+        config.backend("llama")
+        config.backend("whisper")
+    except Exception as exc:  # noqa: BLE001 - detection must never stop startup
+        jobs.log_exception(exc)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     config.TEMP.mkdir(parents=True, exist_ok=True)
@@ -45,6 +54,14 @@ async def lifespan(_app: FastAPI):
     except OSError as exc:
         jobs.log_exception(exc)
     jobs.install_kill_on_close()
+    # Probe the GPU now, on a background thread, rather than lazily.
+    #
+    # Detection shells out to nvidia-smi and (on a machine without it) two
+    # llama.cpp probes with 60-second timeouts. It is reachable from the ETA,
+    # which runs inside `_status()` on the event loop -- so a first call
+    # arriving there would stall every request, Cancel included, for as long as
+    # the probe took. Priming it in the background means the loop never waits.
+    threading.Thread(target=_prime_hardware, name="gpu-probe", daemon=True).start()
     # The update script waits for this to disappear before replacing files.
     updater.mark_running()
     try:
@@ -89,7 +106,8 @@ async def style_css() -> FileResponse:
 @app.get("/api/models")
 async def model_choices() -> dict:
     """The model dropdown: what is installed, and what this card should use."""
-    return hardware.describe(hardware.detect_vram_mb())
+    return await asyncio.to_thread(
+        lambda: hardware.describe(hardware.detect_vram_mb()))
 
 
 @app.get("/api/current")

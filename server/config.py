@@ -55,18 +55,28 @@ def whisper_cli_path(backend: str) -> Path:
     return engine_dir("whisper", backend) / "whisper-cli.exe"
 
 
+_backend_cache: dict = {}
+
+
 def backend(engine: str = "llama") -> str:
     """The backend this engine will actually use, honouring config.json.
 
     Per engine, not per machine: whisper and llama are not shipped in step.
+
+    Memoised. It reads config.json and stats the binary folders, and the ETA
+    asks for it on every progress event; config.json is read once at startup
+    anyway, so nothing here can change without a restart.
     """
+    if engine in _backend_cache:
+        return _backend_cache[engine]
     from . import hardware
 
     try:
         requested = str(load_config().get("gpu", {}).get("backend", "auto"))
     except RuntimeError:
         requested = "auto"
-    return hardware.resolve_backend(engine, requested)
+    _backend_cache[engine] = hardware.resolve_backend(engine, requested)
+    return _backend_cache[engine]
 
 
 class _BackendPath:
@@ -192,7 +202,10 @@ _DEFAULTS = {
     "llm": {
         "model": "auto",
         "ctx_size": 32768,
-        "gpu_layers": 99,
+        # "auto" = detected per machine (hardware.placement): the FFN split on
+        # a dedicated GPU, the processor on unified memory. An explicit number
+        # or regex overrides; "" means omit the flag and let llama.cpp fit it.
+        "gpu_layers": "auto",
         "cpu_ffn_regex": "auto",
         "cache_type_k": "q8_0",
         "cache_type_v": "q8_0",
@@ -295,6 +308,19 @@ def child_env() -> dict:
     """
     env = dict(os.environ)
     env["PATH"] = str(BIN) + os.pathsep + env.get("PATH", "")
+
+    # AMD on Vulkan crashes hard in ggml's KHR_coopmat path -- see
+    # hardware.needs_coopmat_workaround for the measurement. ggml tests this
+    # variable for existence, not value, so "1" and "0" both disable it.
+    #
+    # Guarded on `probed()`: detection spawns children of its own, and those
+    # children ask for this environment. Consulting detection here before it
+    # has run would recurse forever. Enumeration itself is safe with matrix
+    # cores enabled -- it is only inference that dies.
+    from . import hardware
+
+    if hardware.probed() and hardware.needs_coopmat_workaround():
+        env["GGML_VK_DISABLE_COOPMAT"] = "1"
     return env
 
 
