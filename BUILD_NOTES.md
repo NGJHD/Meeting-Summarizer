@@ -2138,6 +2138,89 @@ disagrees" is a hard stop.
   check. That is the same trust as clicking the release link by hand, which is what this
   replaces.
 
+## 9r. A fresh clone could not start at all
+
+Reported after downloading a fresh copy:
+
+```
+  These files are missing from the application folder:
+      runtime\python.exe
+      bin\ffmpeg.exe
+```
+
+`bin\` and `runtime\` are gitignored -- they are 30 GB of payload -- and
+`DOWNLOAD_MODELS.bat` fetched the models and the inference binaries but **nothing at all
+fetched the Python runtime or ffmpeg**. They existed only because they were sitting on the
+development machine. Same class of hole as the whisper-vulkan one, but a hard stop rather
+than a silent slowdown: a first install was impossible.
+
+Both are now fetched:
+
+- **`runtime\`** -- CPython 3.12.14 with every wheel already vendored, published on this
+  repository under the pre-release tag `runtime-cpython-3.12.14`. Hosting the exact tested
+  environment beats a `pip install` list that would drift, and keeps `pip` out of the
+  install path entirely.
+- **`bin\ffmpeg.exe`** -- from BtbN's builds, pinned to `autobuild-2026-09-07-15-39`.
+
+### The ffmpeg licence, changed on purpose
+
+The build that was on the development machine was `--enable-gpl --enable-version3`: a
+**GPLv3** ffmpeg. That places GPLv3 obligations on anyone the assembled folder is passed
+to, which is a poor trade for a component we invoke as a subprocess and link nothing
+against.
+
+The downloader now fetches the **LGPL** variant (`--enable-version3` only). Verified it
+loses nothing the pipeline uses:
+
+| | |
+|---|---|
+| mp3 / aac / opus / vorbis / pcm decode | yes |
+| `libmp3lame` (speaker clips) | yes |
+| `pcm_s16le` (stage 1 output) | yes |
+| `Duration:` banner that `audio.py` parses | yes |
+
+Both real commands the app issues were run against it: mp3 to 16 kHz mono WAV, and an
+8-second 64 kbps mono mp3 clip. Both exit 0.
+
+### Tested as the user did
+
+A fresh `git archive` of HEAD, with only `models\` junctioned in to avoid re-downloading
+28 GB:
+
+1. `run.bat` first -- reproduced the reported error exactly.
+2. `DOWNLOAD_MODELS.bat` -- fetched the runtime, ffmpeg and all six binary sets.
+3. `config.missing_files()` -- empty.
+4. Server started, `/api/health` ok, backend detection correct.
+5. A real 55-second job: convert, 117 words transcribed, diarization ran, merge wrote
+   5 turns.
+
+`run.bat`'s failure message was also wrong for this case -- it said the folder "may not
+have copied completely", when the right advice for a fresh clone is to run the downloader.
+It now says both.
+
+### Versions are pinned, and now actually pinned
+
+The binaries were already pinned to build numbers and release tags, but all four
+HuggingFace model URLs used `resolve/main` -- a branch head. An upstream re-upload would
+have handed a new machine different weights from the ones every measurement in this file
+was taken against, and the size check would not have caught it. They are now pinned to
+commit SHAs, verified byte-identical to the local copies:
+
+| Model | Revision | Bytes |
+|---|---|---|
+| ggml-large-v3-turbo.bin | `5359861c` | 1,624,555,275 |
+| ggml-silero-v5.1.2.bin | `9ffd54a1` | 885,098 |
+| Qwen3.8-27B-UD-IQ3_XXS.gguf | `4ca72078` | 10,934,860,704 |
+| Qwen3.8-27B-UD-Q4_K_M.gguf | `4ca72078` | 16,464,440,224 |
+
+### Releasing: cut a version, do not clobber an asset
+
+Replacing the v1.0.0 asset in place worked but the CDN served the old bytes from
+`browser_download_url` for about 80 seconds -- and that is precisely the URL the updater
+downloads from. The API already reported the new size while the CDN did not. So a content
+change gets a new version number, which is why this went out as v1.0.1 rather than another
+clobber.
+
 ## 10. Still not measured
 
 - Tokens/second during real map calls on the target hardware.

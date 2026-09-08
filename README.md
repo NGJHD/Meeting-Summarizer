@@ -100,4 +100,16 @@ and its verification against the CUDA binary are in `BUILD_NOTES.md`.
 
 ## Licence
 
-Not yet chosen. The bundled binaries and models carry their own licences.
+**MIT** — see [`LICENSE`](LICENSE). That covers the source here: `server/`, `web/`,
+`prompts/`, the batch files and the documentation.
+
+It does not cover what `DOWNLOAD_MODELS.bat` fetches into `bin/`, `models/` and
+`runtime/`. Those keep their own licences and are listed in
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) — all permissive, with two things
+worth knowing if you pass the assembled folder on:
+
+- **ffmpeg is the LGPL v3 build, chosen deliberately over the GPL one.** It does
+  everything this app needs, and avoids placing GPL obligations on anyone you give the
+  folder to.
+- **The speaker-embedding model is CC-BY-4.0**, which requires attribution to NVIDIA.
+  `THIRD_PARTY_NOTICES.md` provides it, so keep that file with the folder.

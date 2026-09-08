@@ -17,8 +17,9 @@ echo.
 echo   Meeting Summariser - downloading models
 echo   ---------------------------------------
 echo.
-echo   Total download: about 30 GB - 6 models plus the inference binaries
-echo   for every graphics vendor. This will take a while.
+echo   Total download: about 30 GB - the Python runtime, ffmpeg, 6 models
+echo   and the inference binaries for every graphics vendor.
+echo   This will take a while.
 echo   Already-downloaded files are skipped, so it is safe to re-run
 echo   this script if the connection drops.
 echo.
@@ -37,13 +38,20 @@ if errorlevel 1 (
 
 set "FAILED="
 
+rem  Every URL below is pinned to an exact revision -- a HuggingFace commit SHA
+rem  or a GitHub release tag -- never to a branch head. `resolve/main` would let
+rem  an upstream re-upload silently hand a new machine different weights from
+rem  the ones every measurement in BUILD_NOTES.md was taken against, and the
+rem  size check would not catch it. To move to a newer model, change the SHA
+rem  here deliberately and re-measure.
+rem
 rem  get <target file> <minimum size in bytes> <url> <description>
 call :get "models\ggml-large-v3-turbo.bin" 1500000000 ^
-  "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin?download=true" ^
+  "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-large-v3-turbo.bin?download=true" ^
   "Speech recognition model - 1.6 GB"
 
 call :get "models\ggml-silero-v5.1.2.bin" 800000 ^
-  "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin?download=true" ^
+  "https://huggingface.co/ggml-org/whisper-vad/resolve/9ffd54a1e1ee413ddf265af9913beaf518d1639b/ggml-silero-v5.1.2.bin?download=true" ^
   "Voice activity detector - 1 MB"
 
 call :get "models\speaker-embedding.onnx" 90000000 ^
@@ -53,11 +61,11 @@ call :get "models\speaker-embedding.onnx" 90000000 ^
 rem  Both language models ship: the app picks by VRAM at startup and the UI
 rem  lets the user override, so either may be selected on any machine.
 call :get "models\Qwen3.8-27B-UD-IQ3_XXS.gguf" 10000000000 ^
-  "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-IQ3_XXS.gguf?download=true" ^
+  "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/4ca720788d1e01f1bff70c033e0d0028fd02e502/Qwen3.8-27B-UD-IQ3_XXS.gguf?download=true" ^
   "Language model, Low Quality - 10.9 GB"
 
 call :get "models\Qwen3.8-27B-UD-Q4_K_M.gguf" 16000000000 ^
-  "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q4_K_M.gguf?download=true" ^
+  "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/4ca720788d1e01f1bff70c033e0d0028fd02e502/Qwen3.8-27B-UD-Q4_K_M.gguf?download=true" ^
   "Language model, High Quality - 16.5 GB, this is the long one"
 
 rem  The speaker segmentation model is only published inside an archive.
@@ -102,6 +110,22 @@ rem  nobody has to install a C++ toolchain to get it. Without it a machine with
 rem  no NVIDIA card still works, but transcription drops to the CPU build and
 rem  costs roughly 5-10x on that stage.
 rem ---------------------------------------------------------------------------
+
+rem  The Python runtime and ffmpeg. Neither is in the repository and neither
+rem  came from anywhere until now -- a fresh clone had no way to obtain them,
+rem  which made a first install impossible. The runtime is this project's own
+rem  assembled environment (exact CPython + exact wheel versions, no pip at
+rem  install time); ffmpeg comes from upstream, pinned to a dated build.
+rem
+rem  The LGPL ffmpeg is chosen deliberately over the GPL one. It decodes
+rem  everything the app accepts and still has libmp3lame for the speaker
+rem  clips, and it keeps the distributed folder far simpler to pass on.
+
+call :getzip "runtime" "runtime\python.exe" 80000000 ^
+  "https://github.com/NGJHD/Meeting-Summarizer/releases/download/runtime-cpython-3.12.14/runtime-cpython.zip" ^
+  "Python runtime - 89 MB"
+
+call :getffmpeg
 
 set "LLAMA_BUILD=b10852"
 set "WHISPER_BUILD=b4938"
@@ -149,6 +173,79 @@ if defined FAILED (
 )
 echo.
 pause
+exit /b 0
+
+rem ---------------------------------------------------------------------------
+:getzip
+rem  %1 destination folder  %2 sentinel file  %3 minimum bytes  %4 url  %5 description
+set "DEST=%~1"
+set "SENTINEL=%~2"
+set "MINSIZE=%~3"
+set "URL=%~4"
+set "DESC=%~5"
+
+if exist "%SENTINEL%" (
+  echo   [skip] %DESC% - already present
+  exit /b 0
+)
+echo   [....] %DESC%
+if not exist "temp" mkdir "temp"
+curl.exe -L --fail --retry 5 --retry-delay 5 -C - -# -o "temp\_pkg.zip" "%URL%"
+if errorlevel 1 (
+  echo   [FAIL] %DESC%
+  set "FAILED=1"
+  exit /b 1
+)
+for %%A in ("temp\_pkg.zip") do set "SIZE=%%~zA"
+if !SIZE! LSS %MINSIZE% (
+  echo   [FAIL] %DESC% - file is smaller than expected
+  set "FAILED=1"
+  del /Q "temp\_pkg.zip"
+  exit /b 1
+)
+if not exist "%DEST%" mkdir "%DEST%"
+"%SystemRoot%\System32\tar.exe" -xf "temp\_pkg.zip" -C "%DEST%"
+if errorlevel 1 (
+  echo   [FAIL] %DESC% - could not unpack
+  set "FAILED=1"
+  del /Q "temp\_pkg.zip"
+  exit /b 1
+)
+del /Q "temp\_pkg.zip"
+echo   [ ok ] %DESC%
+exit /b 0
+
+rem ---------------------------------------------------------------------------
+:getffmpeg
+rem  Only ffmpeg.exe is kept; the archive also carries ffplay and ffprobe,
+rem  which this app never calls.
+if exist "bin\ffmpeg.exe" (
+  echo   [skip] ffmpeg - already present
+  exit /b 0
+)
+echo   [....] ffmpeg, LGPL build - 147 MB
+if not exist "temp" mkdir "temp"
+set "FFTAG=autobuild-2026-09-07-15-39"
+set "FFNAME=ffmpeg-n9.0.1-27-g9b0578816c-win64-lgpl-9.0"
+curl.exe -L --fail --retry 5 --retry-delay 5 -C - -# -o "temp\_ff.zip" ^
+  "https://github.com/BtbN/FFmpeg-Builds/releases/download/%FFTAG%/%FFNAME%.zip"
+if errorlevel 1 (
+  echo   [FAIL] ffmpeg
+  set "FAILED=1"
+  exit /b 1
+)
+"%SystemRoot%\System32\tar.exe" -xf "temp\_ff.zip" -C "temp" "%FFNAME%/bin/ffmpeg.exe"
+if not exist "temp\%FFNAME%\bin\ffmpeg.exe" (
+  echo   [FAIL] ffmpeg - archive did not contain ffmpeg.exe
+  set "FAILED=1"
+  del /Q "temp\_ff.zip"
+  exit /b 1
+)
+if not exist "bin" mkdir "bin"
+move /Y "temp\%FFNAME%\bin\ffmpeg.exe" "bin\ffmpeg.exe" >nul
+rmdir /S /Q "temp\%FFNAME%" 2>nul
+del /Q "temp\_ff.zip"
+echo   [ ok ] ffmpeg, LGPL build - 147 MB
 exit /b 0
 
 rem ---------------------------------------------------------------------------

@@ -41,7 +41,9 @@ if not "!MISSING!"=="" (
   echo   These files are missing from the application folder:
   for %%F in (!MISSING!) do echo       %%F
   echo.
-  echo   The folder may not have copied completely. Copy it again.
+  echo   If this is a fresh copy, run DOWNLOAD_MODELS.bat first - it fetches
+  echo   the Python runtime, ffmpeg, the models and the inference binaries.
+  echo   Otherwise the folder may not have copied completely; copy it again.
   echo.
   pause
   exit /b 1
