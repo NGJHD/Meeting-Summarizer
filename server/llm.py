@@ -143,6 +143,8 @@ class LlamaServer:
         return self._resolved
 
     def command(self) -> list[str]:
+        from . import hardware
+
         model, layers, regex = self.resolve_model()
         cmd = [
             str(config.LLAMA_SERVER),
@@ -167,6 +169,12 @@ class LlamaServer:
         #   n_gpu_layers already set by user to 99, abort
         if layers:
             cmd += ["--n-gpu-layers", layers]
+        # Only when there is a choice to get wrong. Detection sized the model
+        # against one specific adapter; llama.cpp must use that one and not
+        # whichever it would have picked by itself.
+        device_id = hardware.detect_gpu().get("device_id")
+        if device_id and layers != "0":
+            cmd += ["--device", device_id]
         if regex:
             # Keep attention on the GPU and push the upper blocks' FFN tensors
             # into system RAM. Measured 2.4x faster than letting llama.cpp fit

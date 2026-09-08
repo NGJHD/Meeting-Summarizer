@@ -157,8 +157,22 @@ arithmetic and llama.cpp's `-ngl auto` size against that number and fail with
 `vk::Queue::submit: ErrorOutOfDeviceMemory`. So on unified memory:
 
 - **never** the large model, whatever it advertises (`choose_key`);
-- **no GPU offload at all** on AMD (`placement`), because it is measured slower
-  than the processor -- see §11.1.
+- **no GPU offload at all** (`placement`), because it is measured slower than
+  the processor on both AMD and Intel -- see §11.1.
+
+`uma` is not our inference: ggml sets it from
+`deviceType == eIntegratedGpu`, so a discrete mobile GPU -- an RTX 5080 Laptop,
+say -- is never caught by these rules, and an NVIDIA card of any kind takes the
+CUDA path before the Vulkan probe runs at all.
+
+**Where several Vulkan devices are visible, a discrete one always wins**
+(`_pick_device`), never mind what each claims to have. A hybrid laptop whose
+NVIDIA driver is missing falls through to Vulkan with both adapters listed, and
+there the integrated one advertises a share of system RAM -- 31.7 GB on a 48 GB
+machine, which would beat a 16 GB discrete card on size and lose to it on
+everything that matters. Having chosen, the choice is passed on: `--device` to
+llama-server, `-dev` to whisper-cli, so nothing picks a different adapter than
+the one the model was sized against.
 
 **Language: Python.** A standalone relocatable CPython runtime with vendored pure-Python
 wheels. Frontend is plain HTML/CSS/JS with no build step and no npm.

@@ -171,6 +171,14 @@ def _build_command(cfg: dict, wav: Path, out_prefix: Path) -> list[str]:
         # boundaries and capitalised proper nouns to attribute names.
         "-mc", str(int(w.get("max_context", 0))),
     ]
+    # Same adapter the LLM was sized against, when there is more than one.
+    # whisper takes an index rather than a name.
+    from . import hardware
+
+    gpu = hardware.detect_gpu()
+    if gpu.get("device_id") and gpu.get("device_index"):
+        cmd += ["-dev", str(gpu["device_index"])]
+
     vad_model = config.resolve(w["vad_model"])
     if vad_model.exists():
         cmd += ["--vad", "--vad-model", str(vad_model)]

@@ -114,9 +114,10 @@ def _vulkan_devices() -> list:
     out = _run([str(exe), "--list-devices"], timeout=60)
     found = []
     for line in out.splitlines():
-        m = re.search(r"^\s*\w+\d*:\s*(.+?)\s*\((\d+)\s*MiB", line)
+        m = re.search(r"^\s*(\w+\d*):\s*(.+?)\s*\((\d+)\s*MiB", line)
         if m:
-            found.append((m.group(1).strip(), int(m.group(2))))
+            found.append({"id": m.group(1), "name": m.group(2).strip(),
+                          "vram_mb": int(m.group(3))})
     return found
 
 
@@ -135,15 +136,18 @@ def _vulkan_banner() -> dict:
         return {}
     out = _run([str(exe), "-m", "__probe_no_such_model__.gguf",
                 "-p", "1", "-n", "1", "-r", "1"], timeout=60)
-    m = re.search(r"ggml_vulkan:\s*\d+\s*=\s*(.+?)\s*\|\s*uma:\s*(\d)", out)
-    if not m:
-        return {}
-    cores = re.search(r"matrix cores:\s*(\S+)", out)
-    return {
-        "device": m.group(1).strip(),
-        "uma": m.group(2) == "1",
-        "matrix_cores": cores.group(1) if cores else "",
-    }
+    banner = {}
+    for line in out.splitlines():
+        m = re.search(r"ggml_vulkan:\s*(\d+)\s*=\s*(.+?)\s*\|\s*uma:\s*(\d)", line)
+        if not m:
+            continue
+        cores = re.search(r"matrix cores:\s*(\S+)", line)
+        banner[int(m.group(1))] = {
+            "name": m.group(2).strip(),
+            "uma": m.group(3) == "1",
+            "matrix_cores": cores.group(1) if cores else "",
+        }
+    return banner
 
 
 def detect_gpu() -> dict:
@@ -168,28 +172,49 @@ def _probe() -> dict:
     vram = _nvidia_vram_mb()
     if vram > 0:
         info = {"vendor": "nvidia", "backend": "cuda", "vram_mb": vram,
-                "device": "NVIDIA GPU", "uma": False, "matrix_cores": ""}
+                "device": "NVIDIA GPU", "uma": False, "matrix_cores": "",
+                "device_id": "", "device_index": 0}
     else:
         devices = _vulkan_devices()
         if devices:
-            name, mib = max(devices, key=lambda d: d[1])
             banner = _vulkan_banner()
-            name = banner.get("device") or name
-            lower = name.lower()
+            for i, dev in enumerate(devices):
+                dev.update(banner.get(i, {"uma": False, "matrix_cores": ""}))
+            chosen = _pick_device(devices)
+            lower = chosen["name"].lower()
             vendor = ("amd" if any(k in lower for k in ("amd", "radeon", "gfx"))
                       else "intel" if "intel" in lower
                       else "nvidia" if "nvidia" in lower
                       else "other")
-            info = {"vendor": vendor, "backend": "vulkan", "vram_mb": mib,
-                    "device": name, "uma": bool(banner.get("uma")),
-                    "matrix_cores": banner.get("matrix_cores", "")}
+            info = {"vendor": vendor, "backend": "vulkan",
+                    "vram_mb": chosen["vram_mb"], "device": chosen["name"],
+                    "uma": bool(chosen.get("uma")),
+                    "matrix_cores": chosen.get("matrix_cores", ""),
+                    "device_id": chosen["id"] if len(devices) > 1 else "",
+                    "device_index": devices.index(chosen)}
         else:
             info = {"vendor": "none", "backend": "cpu", "vram_mb": 0,
                     "device": "no GPU detected", "uma": False,
-                    "matrix_cores": ""}
+                    "matrix_cores": "", "device_id": "", "device_index": 0}
 
     _probe_cache.update(info)
     return dict(info)
+
+
+def _pick_device(devices: list) -> dict:
+    """Choose between several Vulkan devices.
+
+    A discrete GPU beats an integrated one, always -- never mind what each
+    claims to have. A hybrid laptop whose NVIDIA driver is missing or broken
+    falls through to the Vulkan path with both adapters visible, and there the
+    integrated one advertises a share of system RAM: 31.7 GB on a 48 GB
+    machine, which would beat a 16 GB discrete card on size and lose to it on
+    every measurement that matters.
+
+    Among devices of the same kind, the largest wins.
+    """
+    discrete = [d for d in devices if not d.get("uma")]
+    return max(discrete or devices, key=lambda d: d["vram_mb"])
 
 
 def probed() -> bool:
