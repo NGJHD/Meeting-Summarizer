@@ -184,10 +184,20 @@
         });
         state.recommended = d.recommended;
         var gb = d.vram_mb ? (d.vram_mb / 1024).toFixed(1) + " GB" : "unknown";
-        $("model-note").textContent =
-          "Detected " + gb + " of video memory, so " +
-          (d.recommended === "q4_k_m" ? "High Quality" : "Low Quality") +
-          " is selected. You can change it.";
+        var how = { cuda: "NVIDIA", vulkan: "Vulkan", cpu: "the processor" };
+        var note = "Detected " + (d.device || "a graphics card") + " with " + gb +
+                   " of video memory, so " +
+                   (d.recommended === "q4_k_m" ? "High Quality" : "Low Quality") +
+                   " is selected. You can change it.";
+        // Say so when transcription and the language model are not on the same
+        // backend -- it is the difference between a 50-minute stage and a
+        // 5-hour one, and the user should not have to guess.
+        if (d.llm_backend && d.whisper_backend &&
+            d.llm_backend !== d.whisper_backend) {
+          note += " Running the language model on " + (how[d.llm_backend] || d.llm_backend) +
+                  " and transcription on " + (how[d.whisper_backend] || d.whisper_backend) + ".";
+        }
+        $("model-note").textContent = note;
         sel.addEventListener("change", showEstimate);
       })
       .catch(function () { /* the dropdown just stays empty; config still applies */ });

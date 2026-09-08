@@ -28,6 +28,9 @@
   "pipeline": {
     "concurrent_diarization": true
   },
+  "gpu": {
+    "backend": "auto"
+  },
   "whisper": {
     "model": "models/ggml-large-v3-turbo.bin",
     "vad_model": "models/ggml-silero-v5.1.2.bin",

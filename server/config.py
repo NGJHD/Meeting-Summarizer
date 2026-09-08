@@ -23,9 +23,82 @@ OUTPUT = ROOT / "output"
 # and ggml-cuda.dll. They cannot share a directory, so each engine keeps its own
 # (see BUILD_NOTES.md). Windows searches the executable's own directory first,
 # so each picks up the right DLLs; the shared CUDA runtime sits in bin\.
+#
+# There is now a second dimension: one folder per backend. CUDA where the
+# machine has an NVIDIA card, Vulkan for AMD and Intel (and as a fallback
+# anywhere), CPU as the last resort.
+#
+#     bin\llama-cuda    bin\llama-vulkan    bin\llama-cpu
+#     bin\whisper-cuda  bin\whisper-vulkan  bin\whisper-cpu
 FFMPEG = BIN / "ffmpeg.exe"
-WHISPER_CLI = BIN / "whisper" / "whisper-cli.exe"
-LLAMA_SERVER = BIN / "llama" / "llama-server.exe"
+
+# Older installs had bin\llama\ and bin\whisper\ with no backend suffix.
+LEGACY_DIRS = {"llama": BIN / "llama", "whisper": BIN / "whisper"}
+
+
+def engine_dir(engine: str, backend: str) -> Path:
+    """Where this engine's binaries live for a given backend."""
+    candidate = BIN / ("%s-%s" % (engine, backend))
+    if candidate.is_dir():
+        return candidate
+    legacy = LEGACY_DIRS.get(engine)
+    if legacy is not None and legacy.is_dir():
+        return legacy
+    return candidate
+
+
+def llama_server_path(backend: str) -> Path:
+    return engine_dir("llama", backend) / "llama-server.exe"
+
+
+def whisper_cli_path(backend: str) -> Path:
+    return engine_dir("whisper", backend) / "whisper-cli.exe"
+
+
+def backend(engine: str = "llama") -> str:
+    """The backend this engine will actually use, honouring config.json.
+
+    Per engine, not per machine: whisper and llama are not shipped in step.
+    """
+    from . import hardware
+
+    try:
+        requested = str(load_config().get("gpu", {}).get("backend", "auto"))
+    except RuntimeError:
+        requested = "auto"
+    return hardware.resolve_backend(engine, requested)
+
+
+class _BackendPath:
+    """`config.WHISPER_CLI` used to be a constant; it is now a lookup.
+
+    Kept as an attribute-compatible object so every existing `str(...)`,
+    `.exists()` and `.parent` call site keeps working, rather than touching
+    every caller to thread a backend through.
+    """
+
+    def __init__(self, engine: str, resolver):
+        self._engine = engine
+        self._resolver = resolver
+
+    def _p(self) -> Path:
+        return self._resolver(backend(self._engine))
+
+    def __getattr__(self, name):
+        return getattr(self._p(), name)
+
+    def __fspath__(self) -> str:
+        return str(self._p())
+
+    def __str__(self) -> str:
+        return str(self._p())
+
+    def __truediv__(self, other):
+        return self._p() / other
+
+
+WHISPER_CLI = _BackendPath("whisper", whisper_cli_path)
+LLAMA_SERVER = _BackendPath("llama", llama_server_path)
 
 CONFIG_PATH = ROOT / "config.json"
 
@@ -109,8 +182,6 @@ def migrate_flat_output() -> int:
 # startup so the failure is a plain sentence instead of a crash mid-job.
 REQUIRED_FILES = [
     FFMPEG,
-    WHISPER_CLI,
-    LLAMA_SERVER,
     MODELS / "ggml-large-v3-turbo.bin",
     MODELS / "ggml-silero-v5.1.2.bin",
     MODELS / "segmentation-3.0.onnx",
@@ -145,6 +216,8 @@ _DEFAULTS = {
         "reduce_effort": "medium",
     },
     "pipeline": {"concurrent_diarization": True},
+    # "auto" detects; "cuda" / "vulkan" / "cpu" pin it.
+    "gpu": {"backend": "auto"},
     "whisper": {
         "model": "models/ggml-large-v3-turbo.bin",
         "vad_model": "models/ggml-silero-v5.1.2.bin",
@@ -234,6 +307,11 @@ def missing_files() -> list[Path]:
     diarization have already run.
     """
     missing = [p for p in REQUIRED_FILES if not p.exists()]
+    # The engines are resolved per backend, so check the pair this machine
+    # will actually launch rather than a hard-coded folder.
+    missing += [p for p in (whisper_cli_path(backend("whisper")),
+                            llama_server_path(backend("llama")))
+                if not p.exists()]
     try:
         from . import hardware
 

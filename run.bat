@@ -14,8 +14,19 @@ rem ---- preflight: name the missing file plainly, do not vanish -------------
 set "MISSING="
 if not exist "runtime\python.exe"                     set "MISSING=!MISSING! runtime\python.exe"
 if not exist "bin\ffmpeg.exe"                         set "MISSING=!MISSING! bin\ffmpeg.exe"
-if not exist "bin\whisper\whisper-cli.exe"            set "MISSING=!MISSING! bin\whisper\whisper-cli.exe"
-if not exist "bin\llama\llama-server.exe"             set "MISSING=!MISSING! bin\llama\llama-server.exe"
+rem  One engine folder per backend. Only *some* must be present: an NVIDIA
+rem  machine needs the cuda pair, an AMD or Intel one the vulkan/cpu pair.
+rem  The server picks per engine at startup; here we only insist that each
+rem  engine has at least one build to run.
+set "HAVE_LLAMA="
+for %%B in (cuda vulkan cpu) do if exist "bin\llama-%%B\llama-server.exe"  set "HAVE_LLAMA=1"
+if exist "bin\llama\llama-server.exe" set "HAVE_LLAMA=1"
+if not defined HAVE_LLAMA set "MISSING=!MISSING! bin\llama-*\llama-server.exe"
+
+set "HAVE_WHISPER="
+for %%B in (cuda vulkan cpu) do if exist "bin\whisper-%%B\whisper-cli.exe" set "HAVE_WHISPER=1"
+if exist "bin\whisper\whisper-cli.exe" set "HAVE_WHISPER=1"
+if not defined HAVE_WHISPER set "MISSING=!MISSING! bin\whisper-*\whisper-cli.exe"
 if not exist "models\ggml-large-v3-turbo.bin"         set "MISSING=!MISSING! models\ggml-large-v3-turbo.bin"
 if not exist "models\ggml-silero-v5.1.2.bin"          set "MISSING=!MISSING! models\ggml-silero-v5.1.2.bin"
 if not exist "models\segmentation-3.0.onnx"           set "MISSING=!MISSING! models\segmentation-3.0.onnx"

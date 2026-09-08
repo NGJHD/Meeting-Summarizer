@@ -25,7 +25,12 @@ silently substitute your own approach.
 4. **Non-technical end user.** They will not read a README, edit a config file, or
    understand an error message containing a stack trace.
 5. **Single machine target.** Windows 11, NVIDIA GPU with 16GB VRAM, 32GB system RAM.
-   The only external dependency you may assume is an installed NVIDIA display driver.
+   The only external dependency you may assume is an installed display driver.
+
+   **AMD and Intel are supported too**, via Vulkan — one cross-vendor binary, integrated
+   or discrete, needing nothing installed beyond a current driver. The backend is
+   detected at startup and resolved **per engine**, because whisper.cpp and llama.cpp
+   are not shipped in step: see §2.1.
 
 ### Scope
 
@@ -107,6 +112,35 @@ Audio file
                                     └─> output\<name>_summary.md
 ```
 
+### 2.1 Backends
+
+Every inference binary ships once per backend, and the app picks at startup:
+
+```
+bin\llama-cuda\    bin\llama-vulkan\    bin\llama-cpubin\whisper-cuda\  bin\whisper-vulkan\  bin\whisper-cpu```
+
+- **CUDA** where there is an NVIDIA card. Fastest, and what the numbers in
+  `BUILD_NOTES.md` were measured on.
+- **Vulkan** for AMD and Intel, integrated or discrete. One binary, no vendor runtime.
+- **CPU** as the last resort — usable only for very short recordings.
+
+Detection: `nvidia-smi` first; failing that, `llama-server --list-devices` from the
+Vulkan build, which is the **only reliable cross-vendor VRAM read**.
+`Win32_VideoController.AdapterRAM` is a 32-bit field that caps at 4 GB and reports
+4095 MB for a 16 GB card, so it must not be used.
+
+**The choice is per engine, not per machine.** whisper.cpp publishes no Vulkan binary
+for Windows — it has to be built from source — so until `bin\whisper-vulkan\` exists,
+a non-NVIDIA machine runs the LLM on Vulkan and transcription on CPU. That is a
+deliberate, working intermediate state: the LLM is 80–95% of the wall time. Drop a
+Vulkan whisper build into that folder and it is picked up with no code change.
+
+The CUDA binaries are **never** used as a fallback on a machine with no NVIDIA card:
+they would load `ggml-cuda.dll`, find no device and quietly run on CPU anyway — slower
+to start and far harder to diagnose than choosing the CPU build outright.
+
+`gpu.backend` in `config.json` is `"auto"`; `"cuda"` / `"vulkan"` / `"cpu"` pin it.
+
 **Language: Python.** A standalone relocatable CPython runtime with vendored pure-Python
 wheels. Frontend is plain HTML/CSS/JS with no build step and no npm.
 
@@ -129,9 +163,10 @@ MeetingSummariser\
     Lib\site-packages\        <- fastapi, uvicorn, starlette, pydantic, anyio, httpx...
   bin\
     ffmpeg.exe
-    whisper-cli.exe           + its CUDA DLLs
-    llama-server.exe          + its CUDA DLLs
-    sherpa-onnx-*.dll / .pyd  <- ONNX Runtime diarization, CPU only
+    cudart64_12.dll ...       <- CUDA runtime, shared by both NVIDIA builds
+    llama-cuda\ llama-vulkan\ llama-cpu\      <- one folder per backend (§2.1)
+    whisper-cuda\ whisper-cpu\                <- whisper-vulkan must be built
+    sherpa-onnx-*.dll / .pyd  <- ONNX Runtime diarization, CPU only, vendor-neutral
   models\
     ggml-large-v3-turbo.bin
     ggml-silero-v5.1.2.bin
@@ -214,6 +249,7 @@ operator edits this file in Notepad; the end user never sees it.
   "pipeline": {
     "concurrent_diarization": true
   },
+  "gpu": { "backend": "auto" },
   "estimate": {
     "transcript_tokens_per_audio_minute": 206,
     "fixed_overhead_s": 60,

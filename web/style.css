@@ -16,6 +16,14 @@
 
 * { box-sizing: border-box; }
 
+/* The whole UI is driven by toggling the `hidden` attribute, and the browser's
+   own `[hidden] { display: none }` is a user-agent rule -- any author rule that
+   sets `display` beats it. `.overlay { display: flex }` did exactly that, so
+   the About sheet was permanently on screen: it could not be closed, and it had
+   never been opened so every field still read a dash. One rule, stated once,
+   rather than remembering to guard every future component that sets display. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   background: var(--bg);

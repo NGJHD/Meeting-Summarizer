@@ -1705,6 +1705,84 @@ accepted and ignored, short rows are padded. It scrolls inside its own
 `overflow-x: auto` box — an evidence column runs long and the page body must never scroll
 sideways.
 
+## 9o. Vulkan, and the About overlay that was always on screen
+
+### The About overlay could not be closed, and opened itself
+
+`<div id="about" class="overlay" hidden>` with `.overlay { display: flex }`. The browser's
+`[hidden] { display: none }` is a **user-agent** rule; any author rule that sets `display`
+beats it. So the sheet was permanently on screen, which produced all three reported
+symptoms at once: visible on load, every field still a dash because it had never been
+opened and populated, and `hidden = true` on close doing nothing.
+
+Fixed with one global rule rather than a guard on this component:
+
+```css
+[hidden] { display: none !important; }
+```
+
+The whole UI is driven by toggling `hidden`, so it was luck that nothing had hit this
+before — every other panel simply never sets `display`.
+
+### AMD and Intel via Vulkan
+
+Implemented from `AMD_INTEL_BUILD.md`, everything except the whisper build.
+
+**Binaries.** One folder per backend, all of them shipped rather than chosen at download
+time: the folder is meant to be copied to a different machine, and choosing wrong at
+download time would only be discovered over there. Adds ~1.1 GB against 29 GB of models.
+
+```
+bin\llama-cuda\    bin\llama-vulkan\    bin\llama-cpubin\whisper-cuda\  bin\whisper-cpu```
+
+**Detection.** `nvidia-smi`, then `llama-server --list-devices` from the Vulkan build:
+
+```
+Available devices:
+  Vulkan0: NVIDIA GeForce RTX 3080 (10051 MiB, 9283 MiB free)
+```
+
+That is the reliable cross-vendor VRAM read, and the reason not to use
+`Win32_VideoController.AdapterRAM` — a 32-bit field that caps at 4 GB and reports
+4095 MB for a 16 GB card.
+
+**Per engine, not per machine.** whisper.cpp has never published a Vulkan Windows
+binary — checked every release back to v1.7.2, the assets are CPU, BLAS and cuBLAS only.
+So the backend is resolved separately for each engine, and a non-NVIDIA machine runs the
+LLM on Vulkan while transcription falls back to CPU. The LLM is 80–95% of wall time, so
+that is most of the benefit for none of the build effort. Verified by simulating an AMD
+probe: `llama -> vulkan, whisper -> cpu`.
+
+The CUDA folders are **excluded from the fallback chain** on a machine with no NVIDIA
+card. They ship everywhere, so "the files exist" says nothing; falling back to them would
+load `ggml-cuda.dll`, find no device and quietly run on CPU anyway — slower to start and
+much harder to diagnose.
+
+**Verified on this machine**, which has an NVIDIA card and can therefore run both paths:
+
+| Check | Result |
+|---|---|
+| `--list-devices` on the Vulkan build | enumerates the 3080, 10051 MiB |
+| Flags we depend on (`--override-tensor`, `--flash-attn`, `--cache-type-k`, `--jinja`, `--no-webui`, `--n-gpu-layers`) | all present |
+| `bin\llama-vulkan\` contents | `ggml-vulkan.dll`, **no** `ggml-cuda.dll` |
+| Pin `gpu.backend: vulkan`, run a real reduce | model loaded in 27 s, 2,254-token prompt processed |
+| Per-engine fallback with that pin | llama → vulkan, whisper → cuda |
+| `DOWNLOAD_MODELS.bat` skip path | all 12 items skip correctly |
+| `DOWNLOAD_MODELS.bat` download path | removed `bin\llama-cpu\`, re-run, downloaded and unpacked cleanly |
+
+One measurement worth recording: Vulkan **prefill was far slower than CUDA on this card** —
+2,254 prompt tokens in 138 s. That is a 10 GB card with 22 FFN layers pushed to system
+RAM, so it is a statement about this hardware under heavy offload, not about AMD or Intel
+with enough memory to hold the model. Generation had not produced a token after four
+minutes and the run was cancelled; there is no useful throughput figure to quote.
+
+### Still not done: the Vulkan whisper build
+
+It needs a toolchain this machine does not have — Visual Studio 2022 **C++ workload**
+(not installed), CMake (not installed) and the Vulkan SDK (not installed). Roughly 8 GB
+of admin-elevated installers. Everything else is in place: build it, drop the result in
+`bin\whisper-vulkan\`, and it is picked up with no code change.
+
 ## 10. Still not measured
 
 - Tokens/second during real map calls on the target hardware.
