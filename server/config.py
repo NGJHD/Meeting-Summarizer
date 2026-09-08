@@ -209,7 +209,11 @@ _DEFAULTS = {
         "cpu_ffn_regex": "auto",
         "cache_type_k": "q8_0",
         "cache_type_v": "q8_0",
-        "threads": 10,
+        # "auto" omits --threads and lets llama.cpp use the physical
+        # core count, which measured fastest on both an 8-core Zen 4
+        # and a 16-core Meteor Lake; any fixed number was worse on one
+        # of them. The LLM stage runs alone, so it may have every core.
+        "threads": "auto",
         "port": 8080,
         "startup_timeout_s": 180,
         "idle_timeout_s": 300,

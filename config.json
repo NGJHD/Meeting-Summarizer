@@ -6,7 +6,7 @@
     "cpu_ffn_regex": "auto",
     "cache_type_k": "q8_0",
     "cache_type_v": "q8_0",
-    "threads": 10,
+    "threads": "auto",
     "port": 8080,
     "startup_timeout_s": 180,
     "idle_timeout_s": 300

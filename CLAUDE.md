@@ -157,8 +157,11 @@ arithmetic and llama.cpp's `-ngl auto` size against that number and fail with
 `vk::Queue::submit: ErrorOutOfDeviceMemory`. So on unified memory:
 
 - **never** the large model, whatever it advertises (`choose_key`);
-- **no GPU offload at all** (`placement`), because it is measured slower than
-  the processor on both AMD and Intel -- see §11.1.
+- **the CPU build for the language model** (`resolve_backend`), not the Vulkan
+  build with the layers switched off. Those differ: with the Vulkan backend
+  registered the scheduler still routes prefill to the integrated GPU, which is
+  3.3x slower than the processor on an Intel Arc Xe-LPG and a wash on a Radeon
+  780M -- see §11.1. Transcription is unaffected and stays on Vulkan.
 
 `uma` is not our inference: ggml sets it from
 `deviceType == eIntegratedGpu`, so a discrete mobile GPU -- an RTX 5080 Laptop,

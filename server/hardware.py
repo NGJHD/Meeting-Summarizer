@@ -271,9 +271,32 @@ def _first_available(preferred: str, engine: str) -> str:
 
 
 def resolve_backend(engine: str, requested: str = "") -> str:
-    """Honour an explicit `gpu.backend` in config.json; otherwise detect."""
+    """Honour an explicit `gpu.backend` in config.json; otherwise detect.
+
+    On unified memory the **language model** takes the CPU build outright, not
+    the Vulkan build with the layers switched off. Those are not the same
+    thing: with the Vulkan backend registered the scheduler still routes
+    prefill to the integrated GPU, and on an Intel Arc Xe-LPG -- which has no
+    matrix units at all -- that is catastrophic. Measured on the same model,
+    converted into a real 4-hour job:
+
+                              prefill   generation   4h job
+        Intel  Vulkan -ngl 0   1.61       1.36        14.8 h
+        Intel  CPU build       9.45       1.60         4.5 h   <- 3.3x
+        AMD    Vulkan -ngl 0  33.80       3.15         1.8 h
+        AMD    CPU build      26.72       3.73         1.8 h   <- a wash
+
+    Never worse, and on Intel the difference between a working evening and an
+    overnight job. **Transcription is unaffected** and stays on Vulkan: whisper
+    is a much smaller model and the integrated GPU handles it well.
+    """
     detected = detect_gpu()["backend"]        # also primes the vendor cache
-    preferred = requested if requested in BACKENDS else detected
+    if requested in BACKENDS:
+        preferred = requested                 # the operator has pinned it
+    else:
+        preferred = detected
+        if engine == "llama" and detect_gpu().get("uma"):
+            preferred = "cpu"
     return _first_available(preferred, engine)
 
 

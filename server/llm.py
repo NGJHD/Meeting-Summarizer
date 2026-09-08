@@ -154,7 +154,6 @@ class LlamaServer:
             "--cache-type-k", str(self.llm.get("cache_type_k", "q8_0")),
             "--cache-type-v", str(self.llm.get("cache_type_v", "q8_0")),
             "--jinja",
-            "--threads", str(int(self.llm.get("threads", 8))),
             "--batch-size", "512", "--ubatch-size", "512",
             "--parallel", "1",
             "--host", "127.0.0.1", "--port", str(self.port),
@@ -167,6 +166,9 @@ class LlamaServer:
         #
         #   common_fit_params: failed to fit params to free device memory:
         #   n_gpu_layers already set by user to 99, abort
+        threads = str(self.llm.get("threads", "auto"))
+        if threads and threads != "auto":
+            cmd += ["--threads", threads]
         if layers:
             cmd += ["--n-gpu-layers", layers]
         # Only when there is a choice to get wrong. Detection sized the model

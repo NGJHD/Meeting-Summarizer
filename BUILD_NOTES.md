@@ -1941,11 +1941,52 @@ different drivers and different matrix hardware, same answer -- so the rule is n
 rather than AMD-only. The coopmat workaround stays AMD-only: setting it on the Intel
 laptop changed nothing at any `-ngl`, which is what "not needed here" looks like.
 
-**That laptop cannot run this model, though.** At 1.61 t/s prefill and 1.36 t/s
-generation, a 4-hour meeting is **~15 hours of LLM** -- 2 hours per map call, 6 of them,
-plus the reduce. Its transcription is fine; the 27B is not viable there. Notably it is
-~20x slower than the Radeon 780M on the same model, which is far more than an iGPU
-generation gap and points at the model not fitting in RAM.
+### `-ngl 0` is not "on the processor", and that cost Intel 3x
+
+The Intel laptop was 21x slower than the Radeon 780M at *prefill* but only 2.3x slower at
+generation. Paging was the first guess and it was wrong -- the machine has 48 GB. The CPU
+backend variant was the second guess and also wrong: it loads `ggml-cpu-alderlake.dll`,
+a proper AVX2 build.
+
+The answer is that `-ngl 0` does not take the GPU out of the picture. The weights move to
+system RAM but the Vulkan backend stays registered, and the scheduler still routes prefill
+-- the compute-bound matmuls -- to the GPU. Confirmed on the development machine, prefill
+only, same model:
+
+    Vulkan build, -ngl 0    40.4 tok/s
+    CPU-only build          16.8 tok/s
+
+So on a dedicated card that routing is a 2.4x *gain*, which is why nobody noticed. On an
+Intel Arc Xe-LPG -- an integrated GPU with no matrix units at all, reporting
+`matrix cores: none` natively -- it is a disaster. Using the **CPU build** instead, so
+there is no Vulkan backend for the scheduler to reach for:
+
+| | prefill | generation | 4-hour job |
+|---|---|---|---|
+| Intel, Vulkan `-ngl 0` | 1.61 t/s | 1.36 t/s | **14.8 h** |
+| Intel, CPU build | 9.45 t/s | 1.60 t/s | **4.5 h** |
+| AMD, Vulkan `-ngl 0` | 33.80 t/s | 3.15 t/s | 1.8 h |
+| AMD, CPU build | 26.72 t/s | 3.73 t/s | 1.8 h |
+
+3.3x on Intel, a wash on AMD -- never worse. So on unified memory the language model now
+takes the **CPU binary**, not the Vulkan binary with the layers switched off. Whisper is
+unaffected and stays on Vulkan: it is a far smaller model and both integrated GPUs handle
+it well.
+
+### Thread count: let llama.cpp choose
+
+`-t 6` was tested on the theory that Meteor Lake's E and LP-E cores were dragging the
+batch down. They are not -- the default beat it on both machines:
+
+| | default | `-t 6` |
+|---|---|---|
+| Intel (16 cores) | 9.45 t/s | 8.32 t/s |
+| AMD (8 cores) | 26.72 t/s | 21.94 t/s |
+
+`llm.threads` was 10, which is over-subscribed on the 8-core machine and under-subscribed
+on the 16-core one -- worse than the default on both. It is now `"auto"`, which omits the
+flag. The LLM stage runs after whisper has exited, so it may have every core; §7's thread
+budgeting applies to the concurrent transcribe/diarize stage, not this one.
 
 ### Latency the investigation exposed
 
