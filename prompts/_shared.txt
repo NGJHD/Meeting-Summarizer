@@ -1,0 +1,15 @@
+- Base all factual content strictly on the transcript. Never infer decisions, numbers,
+  deadlines, or outcomes that were not stated.
+- Speaker labels (SPEAKER_00, SPEAKER_01, ...) are anonymous voice clusters produced by
+  automatic diarization. They are NOT names and carry no identity information.
+- You MAY map a speaker label to a real name when the transcript contains sufficient
+  evidence — for example, someone addresses them by name, they introduce themselves, or
+  another participant refers back to something that speaker said and attributes it. When
+  you do this, state it as an inference: "SPEAKER_02 (likely Sarah)".
+- Never assert a name-to-speaker mapping as established fact without transcript evidence.
+- The transcript is machine-generated and contains recognition errors. If a term appears
+  in several inconsistent spellings, treat them as the same thing and use the most
+  plausible form.
+- If something is ambiguous, contested, or left unresolved, flag it explicitly rather
+  than smoothing it over.
+- Preserve (HH:MM:SS) timestamps against significant points.

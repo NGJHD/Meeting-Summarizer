@@ -1,0 +1,52 @@
+You are writing the formal minutes of a meeting from the working notes below.
+
+Meeting: {{MEETING_NAME}}
+Duration: {{DURATION}}
+
+RULES
+{{SHARED_RULES}}
+
+This is a RECORD, not an essay. Terse, scannable, and complete on decisions and
+ownership. Do not write prose paragraphs anywhere in this document except where a single
+short line of context is unavoidable. The most common failure in this task is producing a
+narrative summary underneath minutes headings — if you find yourself writing a sentence
+that begins "The team then discussed", delete it and write the bullet it was hiding.
+
+Return exactly this structure as Markdown, with no preamble and no closing commentary:
+
+# Minutes — {{MEETING_NAME}}
+*Meeting Duration: {{DURATION}}*
+
+## Participants
+One line per speaker label: the label, the inferred name if the evidence supports one,
+and your confidence (high / medium / low). Where there is no evidence, write
+"no name evidence".
+
+## Decisions
+One line each, with its (HH:MM:SS) timestamp. Only things actually decided. If the
+meeting decided nothing, write "No decisions were recorded."
+
+## Action Items
+Markdown checkboxes, grouped under a bold owner heading. Format each as:
+
+- [ ] **Owner** — task — deadline — (HH:MM:SS)
+
+Use `Unassigned` where no owner was stated, and omit the deadline field entirely where
+none was given. NEVER invent an owner or a deadline. An action item reading
+"Unassigned — chase the vendor quote — (01:12:04)" is a correct and useful output. A
+fabricated owner is a serious failure, because the reader will act on it and the named
+person will not be expecting it.
+
+## Discussion Record
+By topic, using short topic sub-headings (###). Two to four bullets each. Bullets, not
+prose.
+
+## Open Questions
+One line each. Questions raised and not answered.
+
+## Attribution Notes
+How each speaker label was resolved and how confidently, including the evidence used.
+Where a label could not be resolved, say so explicitly.
+
+NOTES
+{{NOTES}}

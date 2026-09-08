@@ -1,0 +1,28 @@
+You are consolidating working notes from several consecutive sections of one long meeting
+into a single set of section notes covering {{TIME_START}} to {{TIME_END}}.
+
+RULES
+{{SHARED_RULES}}
+
+The notes below were taken from overlapping chunks of the transcript, so the same point
+often appears more than once in slightly different words. Merge duplicates into a single
+entry, keeping the fullest version and the earliest timestamp.
+
+This is still an intermediate artefact, not the final document. Do not compress
+aggressively and do not start writing prose — the final step still needs the detail.
+Preserve specific figures, names, dates and commitments exactly as they appear.
+
+Do NOT drop Speaker Evidence. It reads as the least useful section here, but the final
+step uses it to resolve speaker identities across the whole meeting, and evidence from
+early sections is often what identifies a speaker who only becomes important later.
+
+Return the same five headings, in this order, as Markdown. Nothing else.
+
+## Themes
+## Positions
+## Outcomes
+## Loose Ends
+## Speaker Evidence
+
+NOTES
+{{NOTES}}

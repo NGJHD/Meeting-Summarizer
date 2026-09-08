@@ -1,0 +1,301 @@
+/* Meeting Summariser - no external assets, no CDN, no web fonts. */
+
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --ink: #14171a;
+  --ink-soft: #5b6570;
+  --line: #dfe3e8;
+  --accent: #1f5fd0;
+  --accent-ink: #ffffff;
+  --danger: #b3261e;
+  --ok: #1a7f4b;
+  --radius: 10px;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, "Courier New", monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.shell {
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 48px 24px 96px;
+}
+
+.head { margin-bottom: 28px; }
+h1 { font-size: 28px; font-weight: 650; letter-spacing: -0.02em; margin: 0 0 6px; }
+.sub { margin: 0; color: var(--ink-soft); font-size: 15px; }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 24px;
+  margin-bottom: 20px;
+}
+
+.notice { display: flex; align-items: center; gap: 12px; color: var(--ink-soft); }
+
+.spinner {
+  width: 16px; height: 16px; flex: none;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---- drop zone ---- */
+
+.drop {
+  border: 2px dashed var(--line);
+  border-radius: var(--radius);
+  padding: 44px 24px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  background: #fbfcfd;
+}
+.drop:hover, .drop:focus-visible { border-color: var(--accent); background: #f4f8ff; outline: none; }
+.drop.over { border-color: var(--accent); background: #eaf1fe; }
+.drop-title { font-size: 17px; font-weight: 600; }
+.drop-hint { color: var(--ink-soft); font-size: 14px; margin-top: 4px; }
+
+/* ---- file info ---- */
+
+.fileinfo { margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--line); }
+.fi-name { font-weight: 600; word-break: break-all; margin-bottom: 12px; }
+.fi-grid { display: flex; flex-wrap: wrap; gap: 28px; margin: 0; }
+.fi-grid dt { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-soft); }
+.fi-grid dd { margin: 2px 0 0; font-variant-numeric: tabular-nums; font-weight: 550; }
+.fi-note { margin: 14px 0 0; color: var(--ink-soft); font-size: 14px; }
+
+/* ---- controls ---- */
+
+.controls { display: flex; align-items: flex-end; gap: 12px; margin-top: 22px; }
+.field { display: flex; flex-direction: column; gap: 5px; }
+.field-label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-soft); }
+
+select, .btn {
+  font: inherit;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  padding: 9px 14px;
+  cursor: pointer;
+}
+select { min-width: 150px; }
+.btn:hover:not(:disabled) { border-color: #b9c0c9; }
+.btn:disabled { opacity: 0.45; cursor: default; }
+
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; margin-left: auto; }
+.btn.primary:hover:not(:disabled) { background: #1a53b8; }
+.btn.danger { color: var(--danger); border-color: #e6c9c7; }
+.btn.danger:hover { background: #fdf3f2; }
+
+/* ---- progress ---- */
+
+.prog-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+.stage { font-size: 17px; font-weight: 600; }
+.stage-msg { color: var(--ink-soft); font-size: 14px; margin-top: 2px; }
+.prog-right { text-align: right; }
+.pct { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.elapsed { color: var(--ink-soft); font-size: 13px; font-variant-numeric: tabular-nums; }
+
+.bar { height: 8px; background: #eceff3; border-radius: 999px; overflow: hidden; margin: 18px 0; }
+.bar-fill { height: 100%; width: 0; background: var(--accent); border-radius: 999px; transition: width 0.4s ease; }
+
+.log {
+  height: 190px;
+  overflow-y: auto;
+  background: #0f1319;
+  color: #c8d2dd;
+  border-radius: 8px;
+  padding: 12px 14px;
+  font: 12.5px/1.65 var(--mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ---- result ---- */
+
+.result-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
+.result-head h2 { margin: 0; font-size: 20px; }
+.result-actions { display: flex; gap: 10px; }
+
+.tabs { display: flex; gap: 6px; margin: 18px 0 0; border-bottom: 1px solid var(--line); }
+.tab {
+  font: inherit; font-size: 14px; background: none; border: none; cursor: pointer;
+  padding: 9px 14px; color: var(--ink-soft); border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+
+.doc { margin-top: 20px; max-height: 620px; overflow-y: auto; }
+.doc h1 { font-size: 22px; }
+.doc h2 { font-size: 17px; margin: 26px 0 8px; padding-bottom: 5px; border-bottom: 1px solid var(--line); }
+.doc h3 { font-size: 15px; margin: 18px 0 6px; }
+.doc p, .doc li { font-size: 15px; }
+.doc ul { padding-left: 22px; }
+.doc code { font: 13px var(--mono); background: #eef1f5; padding: 1px 5px; border-radius: 4px; }
+.doc em { color: var(--ink-soft); }
+.doc .turn { font: 13.5px/1.7 var(--mono); margin: 0 0 4px; }
+.doc .spk { color: var(--accent); font-weight: 600; cursor: pointer; }
+.doc .spk:hover { text-decoration: underline; }
+.doc .ts { color: var(--ink-soft); }
+.doc hr { border: none; border-top: 1px solid var(--line); margin: 20px 0; }
+
+/* ---- errors ---- */
+
+.error, .fail-msg { color: var(--danger); }
+.error { margin: 16px 0 0; font-size: 14px; }
+.fail-title { margin: 0 0 8px; font-size: 20px; }
+.fail-msg { margin: 0; font-size: 15px; }
+
+input[type="number"] {
+  font: inherit;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  padding: 9px 12px;
+  width: 130px;
+}
+input[type="number"]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.hint { margin: 14px 0 0; color: var(--ink-soft); font-size: 13.5px; }
+.note {
+  margin: 0 0 16px; padding: 10px 14px; font-size: 14px;
+  background: #fff8e6; border: 1px solid #f0dfae; border-radius: 8px; color: #6b5312;
+}
+
+/* ---- startup ---- */
+
+.boot-head { display: flex; align-items: center; gap: 12px; }
+.boot-title { font-size: 17px; font-weight: 600; }
+.boot-elapsed { margin-left: auto; color: var(--ink-soft); font-size: 13px; font-variant-numeric: tabular-nums; }
+.boot-msg { margin: 14px 0 0; color: var(--ink-soft); font-size: 14px; }
+.boot-detail { margin: 8px 0 0; font-size: 14px; color: var(--ink); background: #fff8e6;
+  border: 1px solid #f0dfae; border-radius: 8px; padding: 10px 14px; }
+.fail-msg { white-space: pre-wrap; }
+
+.remaining { color: var(--ink-soft); font-size: 13px; font-variant-numeric: tabular-nums; margin-top: 2px; }
+
+/* ---- speaker naming ---- */
+
+.naming-title { margin: 0 0 6px; font-size: 20px; }
+.naming-sub { margin: 0 0 20px; color: var(--ink-soft); font-size: 14px; }
+
+/* Card in the naming panel. Named .spk-row, not .spk: the transcript renders
+   an inline <span class="spk"> for each speaker label, and a bare .spk rule
+   gave those spans padding and a border, which overflowed the line box and
+   collided with the wrapped text above and below. */
+.spk-row { border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 12px; }
+.spk-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.spk-tag { font: 13px var(--mono); color: var(--accent); font-weight: 600; min-width: 108px; }
+.spk-name { flex: 0 0 220px; font: inherit; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.spk-name:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.spk-secs { margin-left: auto; color: var(--ink-soft); font-size: 12.5px; }
+
+.clip { display: flex; align-items: flex-start; gap: 10px; padding: 5px 0; }
+.clip-play {
+  flex: none; width: 30px; height: 30px; border-radius: 50%;
+  border: 1px solid var(--line); background: #fff; cursor: pointer;
+  font-size: 11px; line-height: 1; color: var(--accent);
+}
+.clip-play:hover { border-color: var(--accent); background: #f4f8ff; }
+.clip-ts { flex: none; font: 12px var(--mono); color: var(--ink-soft); padding-top: 7px; }
+.clip-text {
+  font-size: 13.5px; color: var(--ink); padding-top: 6px; line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+
+/* ---- model picker tooltip ---- */
+
+.tip {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 15px; height: 15px; margin-left: 5px; border-radius: 50%;
+  border: 1px solid var(--line); background: #fff; color: var(--ink-soft);
+  font-size: 10px; font-weight: 700; cursor: help; position: relative;
+  text-transform: none; letter-spacing: 0;
+}
+.tip:hover, .tip:focus { border-color: var(--accent); color: var(--accent); outline: none; }
+.tip::after {
+  content: attr(data-tip);
+  position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+  width: 260px; padding: 9px 11px; border-radius: 8px;
+  background: #14171a; color: #f2f5f8; font-size: 12.5px; font-weight: 400;
+  line-height: 1.45; text-align: left; letter-spacing: 0;
+  opacity: 0; visibility: hidden; transition: opacity 0.12s; z-index: 10;
+}
+.tip:hover::after, .tip:focus::after { opacity: 1; visibility: visible; }
+#model { min-width: 300px; }
+.model-note { margin: 10px 0 0; color: var(--ink-soft); font-size: 13px; }
+
+/* ---- history ---- */
+
+.hist-head { display: flex; align-items: baseline; gap: 12px; }
+.hist-title { margin: 0; font-size: 16px; font-weight: 600; }
+.hist-head .btn { margin-left: auto; }
+.hist-sub { margin: 6px 0 14px; color: var(--ink-soft); font-size: 13.5px; }
+.hist-row {
+  display: flex; align-items: baseline; gap: 14px; width: 100%;
+  padding: 11px 14px; margin-bottom: 8px; text-align: left; cursor: pointer;
+  border: 1px solid var(--line); border-radius: var(--radius);
+  background: #fff; font: inherit; color: inherit;
+}
+.hist-row:hover:not(:disabled) { border-color: var(--accent); background: #f7faff; }
+.hist-row:disabled { opacity: 0.5; cursor: default; }
+.hist-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hist-meta { margin-left: auto; flex: none; color: var(--ink-soft); font-size: 12.5px; }
+
+/* ---- rebuild buttons on the finished page ---- */
+
+.build {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
+  padding: 12px 0 16px; border-bottom: 1px solid var(--line); margin-bottom: 4px;
+}
+.build-label {
+  font-size: 11.5px; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--ink-soft);
+}
+.build-note { color: var(--ink-soft); font-size: 12.5px; }
+.btn.small { padding: 6px 11px; font-size: 13px; }
+
+/* Brief highlight when a transcript speaker tag jumps here. */
+.spk-row.flash { border-color: var(--accent); background: #f7faff; }
+.naming-done { color: var(--ink-soft); font-size: 13px; }
+
+/* The mode dropdown has to fit "Summary & Minutes" without clipping; the
+   shell was widened to 920px to make room alongside the model picker. */
+#mode { min-width: 178px; }
+
+/* "Process Another Meeting" sits below everything the finished page shows,
+   including the naming panel: it is the last thing you do, not the first. */
+.panel.plain {
+  background: none; border: none; box-shadow: none;
+  padding: 4px 0 0; text-align: center;
+}
+#another .btn { min-width: 240px; }
+
+/* ---- tables ---- */
+
+/* The reduce prompts invite a Participants table, and evidence columns run
+   long. It scrolls inside its own box: the page body must never scroll
+   sideways. */
+.tablewrap { overflow-x: auto; margin: 14px 0; }
+.doc table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+.doc th, .doc td {
+  border: 1px solid var(--line); padding: 7px 10px;
+  text-align: left; vertical-align: top; line-height: 1.5;
+}
+.doc th { background: #f5f7fa; font-weight: 600; white-space: nowrap; }
+.doc td:first-child { white-space: nowrap; }

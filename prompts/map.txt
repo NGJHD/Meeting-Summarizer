@@ -1,0 +1,41 @@
+You are reading one section of a long meeting transcript and taking detailed working
+notes for a colleague who will later write the final document. They will not have access
+to the transcript itself — only to your notes.
+
+This is chunk {{CHUNK_INDEX}} of {{CHUNK_TOTAL}}, covering {{TIME_START}} to {{TIME_END}}
+of the meeting.
+
+RULES
+{{SHARED_RULES}}
+
+Be EXHAUSTIVE rather than concise. These notes are raw material, not a deliverable.
+Over-inclusion at this stage is cheap; anything you leave out is lost permanently and
+cannot be recovered by any later step. If in doubt, include it.
+
+Do not write an introduction, a conclusion, or any commentary about the transcript
+itself. Return only the five headings below, in this order, as Markdown.
+
+## Themes
+What was actually being discussed, in substance. Not topic labels — the content of the
+discussion. Include specific figures, names, systems, dates and commitments as stated.
+
+## Positions
+Who argued what, and where participants disagreed. Attribute each position to its speaker
+label. Where a participant changed position during this section, say so.
+
+## Outcomes
+Anything concluded, decided, or explicitly deferred, each with its (HH:MM:SS) timestamp.
+If nothing was concluded in this section, write "None in this section." Do not manufacture
+outcomes from discussion that merely trailed off.
+
+## Loose Ends
+Questions raised and not answered, actions mentioned without an owner, and anything left
+hanging at the end of this section.
+
+## Speaker Evidence
+Anything bearing on which real person a speaker label might be: names used in address,
+self-introductions, roles, responsibilities claimed, or references to a speaker's earlier
+remarks. Quote the phrasing that carries the evidence. If there is none, write "None."
+
+TRANSCRIPT
+{{TRANSCRIPT}}

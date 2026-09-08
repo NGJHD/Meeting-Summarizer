@@ -1,0 +1,63 @@
+{
+  "llm": {
+    "model": "auto",
+    "ctx_size": 32768,
+    "gpu_layers": 99,
+    "cpu_ffn_regex": "auto",
+    "cache_type_k": "q8_0",
+    "cache_type_v": "q8_0",
+    "threads": 10,
+    "port": 8080,
+    "startup_timeout_s": 180,
+    "idle_timeout_s": 300
+  },
+  "chunking": {
+    "target_tokens": 10000,
+    "overlap_tokens": 400,
+    "max_map_output_tokens": 1500,
+    "group_reduce_threshold": 8,
+    "group_size": 5,
+    "max_group_output_tokens": 2500
+  },
+  "thinking": {
+    "map": false,
+    "group_reduce": false,
+    "reduce": true,
+    "reduce_effort": "medium"
+  },
+  "pipeline": {
+    "concurrent_diarization": true
+  },
+  "whisper": {
+    "model": "models/ggml-large-v3-turbo.bin",
+    "vad_model": "models/ggml-silero-v5.1.2.bin",
+    "language": "en",
+    "threads": 5,
+    "max_context": 0,
+    "dtw": true
+  },
+  "diarization": {
+    "enabled": true,
+    "threads": 5,
+    "num_speakers": 0,
+    "cluster_threshold": 0.7,
+    "min_duration_on": 0.3,
+    "min_duration_off": 0.5,
+    "max_speakers": 20,
+    "min_cluster_speech_s": 30,
+    "min_cluster_speech_fraction": 0.005,
+    "reassign_max_distance": 0.85,
+    "merge_centroid_distance": 0.35,
+    "min_embed_duration": 1.0,
+    "min_coverage_fraction": 0.8,
+    "embedding_cache": true
+  },
+  "server": {
+    "port": 8000
+  },
+  "estimate": {
+    "transcript_tokens_per_audio_minute": 206,
+    "fixed_overhead_s": 60,
+    "buffer_fraction": 0
+  }
+}

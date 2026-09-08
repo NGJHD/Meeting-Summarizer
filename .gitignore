@@ -1,0 +1,36 @@
+# Meeting Summariser — what does NOT belong in the repository.
+#
+# The app ships as an unzipped folder containing ~30 GB of binaries and model
+# weights. None of that is source, and none of it is versionable. The repo holds
+# the orchestration code, the prompts and the frontend; DOWNLOAD_MODELS.bat
+# fetches everything else.
+
+# ---- shipped payload, fetched by DOWNLOAD_MODELS.bat --------------------
+bin/
+models/
+runtime/
+
+# ---- produced at runtime ------------------------------------------------
+temp/
+output/
+*.partial
+
+# Per-machine timings. Committing them would hand a new machine another
+# machine's measurements, which is exactly what the estimator must not have.
+calibration.json
+
+# Written by run.bat, pointing at whichever port it settled on.
+Open Meeting Summariser.url
+
+# ---- development only, not shipped --------------------------------------
+tools/
+work/
+UPDATE_BUTTON.md
+
+# ---- editor / OS noise ---------------------------------------------------
+__pycache__/
+*.py[cod]
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

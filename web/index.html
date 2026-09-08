@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meeting Summariser</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<main class="shell">
+
+  <header class="head">
+    <h1>Meeting Summariser</h1>
+    <p class="sub">Turns a meeting recording into minutes or a summary. Everything runs on this machine.</p>
+  </header>
+
+  <section id="connecting" class="panel">
+    <div class="boot-head">
+      <span class="spinner" id="boot-spinner" aria-hidden="true"></span>
+      <span class="boot-title" id="boot-title">Starting up&hellip;</span>
+      <span class="boot-elapsed" id="boot-elapsed">0s</span>
+    </div>
+    <div class="bar"><div class="bar-fill" id="boot-bar"></div></div>
+    <p class="boot-msg" id="boot-msg">Contacting the application&hellip;</p>
+    <p class="boot-detail" id="boot-detail" hidden></p>
+  </section>
+
+  <section id="setup" class="panel" hidden>
+
+    <div id="drop" class="drop" tabindex="0" role="button"
+         aria-label="Choose a recording, or drop one here">
+      <input type="file" id="file" accept=".mp3,.wav,.m4a,.mp4,.mkv" hidden>
+      <div class="drop-inner">
+        <div class="drop-title">Drop a recording here</div>
+        <div class="drop-hint">or click to choose &middot; MP3, WAV, M4A, MP4, MKV</div>
+      </div>
+    </div>
+
+    <div id="fileinfo" class="fileinfo" hidden>
+      <div class="fi-name" id="fi-name"></div>
+      <dl class="fi-grid">
+        <div><dt>Size</dt><dd id="fi-size"></dd></div>
+        <div><dt>Length</dt><dd id="fi-duration">reading&hellip;</dd></div>
+        <div><dt>Estimated time</dt><dd id="fi-estimate">&mdash;</dd></div>
+      </dl>
+      <p class="fi-note" id="fi-note"></p>
+    </div>
+
+    <div class="controls">
+      <label class="field">
+        <span class="field-label">Output</span>
+        <select id="mode">
+          <option value="summary">Summary</option>
+          <option value="minutes">Minutes</option>
+          <option value="both" selected>Summary &amp; Minutes</option>
+        </select>
+      </label>
+      <label class="field">
+        <span class="field-label">Model
+          <span class="tip" tabindex="0" role="note"
+                aria-label="Low Quality suits machines with about 8GB of video memory. High Quality suits machines with about 16GB or more."
+                data-tip="Low Quality is for machines with about 8GB of video memory. High Quality is for machines with about 16GB or more, and writes noticeably more accurate minutes.">?</span>
+        </span>
+        <select id="model"></select>
+      </label>
+      <label class="field">
+        <span class="field-label">Participants no.</span>
+        <input type="number" id="speakers" min="1" max="50" step="1"
+               placeholder="optional" inputmode="numeric">
+      </label>
+      <button id="process" class="btn primary" disabled>Process</button>
+    </div>
+
+    <p class="model-note" id="model-note"></p>
+
+    <p class="hint">Leave the participant count blank if you&rsquo;re unsure. Giving it
+      makes speaker labelling considerably more reliable on long recordings.</p>
+
+    <p id="setup-error" class="error" hidden></p>
+  </section>
+
+  <section id="history" class="panel" hidden>
+    <div class="hist-head">
+      <h2 class="hist-title">Previously processed</h2>
+      <button id="hist-refresh" class="btn small">Refresh</button>
+    </div>
+    <p class="hist-sub">Anything still in the output folder. Open one to read it
+      again, name its speakers, or add the other document.</p>
+    <div id="hist-list"></div>
+  </section>
+
+  <section id="progress" class="panel" hidden>
+    <div class="prog-head">
+      <div>
+        <div class="stage" id="stage-label">Starting</div>
+        <div class="stage-msg" id="stage-msg"></div>
+      </div>
+      <div class="prog-right">
+        <div class="pct" id="pct">0%</div>
+        <div class="elapsed" id="elapsed">0:00</div>
+        <div class="remaining" id="remaining"></div>
+      </div>
+    </div>
+
+    <div class="bar"><div class="bar-fill" id="bar-fill"></div></div>
+
+    <div class="log" id="log" aria-live="polite"></div>
+
+    <div class="controls">
+      <button id="cancel" class="btn danger">Cancel</button>
+    </div>
+  </section>
+
+  <section id="result" class="panel" hidden>
+    <div class="result-head">
+      <h2 id="result-title">Finished</h2>
+      <div class="result-actions">
+        <button id="open-folder" class="btn">Open output folder</button>
+      </div>
+    </div>
+    <p class="note" id="result-note" hidden></p>
+
+    <div class="build" id="build">
+      <span class="build-label">Documents</span>
+      <button class="btn small" id="gen-summary" data-mode="summary">Write a summary</button>
+      <button class="btn small" id="gen-minutes" data-mode="minutes">Write minutes</button>
+      <span class="build-note" id="build-note"></span>
+    </div>
+    <p id="build-error" class="error" hidden></p>
+
+    <div class="tabs" id="tabs" hidden>
+      <button class="tab" data-target="summary">Summary</button>
+      <button class="tab" data-target="minutes">Minutes</button>
+      <button class="tab" data-target="transcript">Transcript</button>
+    </div>
+    <article class="doc" id="doc"></article>
+  </section>
+
+  <section id="naming" class="panel" hidden>
+    <h2 class="naming-title">Who was speaking?</h2>
+    <p class="naming-sub">
+      Play a clip to hear each voice, then type the name. Leave a speaker blank
+      to keep its label. Naming even a few makes the minutes considerably more
+      useful &mdash; action items get a real owner instead of
+      &ldquo;Unassigned&rdquo;.
+    </p>
+    <div id="speaker-rows"></div>
+    <div class="controls">
+      <button id="apply-names" class="btn primary">Apply names</button>
+      <span class="naming-done" id="naming-done" hidden>Names applied.</span>
+    </div>
+    <p class="hint">Applying names is instant &mdash; it rewrites the transcript
+      and the documents in place. If you would rather the model re-write a
+      document knowing the names, use the &ldquo;Regenerate&rdquo; buttons at
+      the top of this page.</p>
+    <p id="naming-error" class="error" hidden></p>
+  </section>
+
+  <section id="another" class="panel plain" hidden>
+    <button id="again" class="btn">Process Another Meeting</button>
+  </section>
+
+  <section id="failed" class="panel" hidden>
+    <h2 class="fail-title">That didn&rsquo;t work</h2>
+    <p class="fail-msg" id="fail-msg"></p>
+    <div class="controls">
+      <button id="copy-diag" class="btn">Copy diagnostic info</button>
+      <button id="retry" class="btn">Start again</button>
+    </div>
+  </section>
+
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>
