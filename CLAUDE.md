@@ -130,10 +130,11 @@ Vulkan build, which is the **only reliable cross-vendor VRAM read**.
 4095 MB for a 16 GB card, so it must not be used.
 
 **The choice is per engine, not per machine.** whisper.cpp publishes no Vulkan binary
-for Windows at all, so `bin\whisper-vulkan\` is **built from source** and ships inside
-the folder rather than being downloaded — the recipe is in `BUILD_NOTES.md` §9o. If it
-is ever missing the app still works: a non-NVIDIA machine falls back to the CPU whisper
-build and keeps the LLM on Vulkan, which is 80–95% of the wall time.
+for Windows at all, so `bin\whisper-vulkan\` is **built from source** (recipe in
+`BUILD_NOTES.md` §9o) and hosted on this project's own releases, which is where
+`DOWNLOAD_MODELS.bat` fetches it from — nobody should need a C++ toolchain to install
+this. If it is ever missing the app still works: a non-NVIDIA machine falls back to the
+CPU whisper build and keeps the LLM on Vulkan, which is 80–95% of the wall time.
 
 The CUDA binaries are **never** used as a fallback on a machine with no NVIDIA card:
 they would load `ggml-cuda.dll`, find no device and quietly run on CPU anyway — slower

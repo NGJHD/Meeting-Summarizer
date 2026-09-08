@@ -1781,8 +1781,14 @@ model, so they are unaffected.
 
 ### The Vulkan whisper build
 
-whisper.cpp has never shipped a Vulkan Windows binary, so this one is built from source
-and travels inside the folder. Toolchain installed for it:
+whisper.cpp has never shipped a Vulkan Windows binary, so this one is built from source.
+It is **published on this repository's own releases** under the pre-release tag
+`whisper-vulkan-b4938`, and `DOWNLOAD_MODELS.bat` fetches it by URL like any other binary
+-- expecting an end user to install Visual Studio, CMake and the Vulkan SDK was never
+realistic. The pre-release flag matters: `/releases/latest` skips those, so a binary asset
+can never be mistaken for an app version by the updater.
+
+Toolchain used to build it:
 
 | | |
 |---|---|

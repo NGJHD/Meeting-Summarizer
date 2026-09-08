@@ -65,7 +65,7 @@ folder per backend and the right pair is chosen per engine.
 | `prompts/` | The map / group-reduce / reduce prompts, as plain text |
 | `config.json` | Every tunable. There is deliberately no settings screen |
 | `run.bat` | Preflight checks, port selection, starts the server, opens the browser |
-| `DOWNLOAD_MODELS.bat` | Fetches ~30 GB of models and per-backend binaries. Resumable, size-verified |
+| `DOWNLOAD_MODELS.bat` | Fetches ~30 GB of models and every per-backend binary. Resumable, size-verified, safe to re-run |
 
 `bin/`, `models/` and `runtime/` are not in the repository — they are the shipped payload,
 fetched by `DOWNLOAD_MODELS.bat` or copied with the release.
@@ -79,8 +79,11 @@ in-app *Check for updates* button downloads it and replaces the code in place, l
 For a first install: clone or download the source, then run `DOWNLOAD_MODELS.bat` once on
 a machine with internet access and copy the whole folder to the offline machine.
 
-One binary is not downloadable: `bin\whisper-vulkan\` is built from source, because
-whisper.cpp publishes no Vulkan build for Windows. The recipe is in `BUILD_NOTES.md` §9o.
+`DOWNLOAD_MODELS.bat` fetches everything, including `bin\whisper-vulkan\`. That one is
+the odd case: whisper.cpp publishes no Vulkan build for Windows, so it is built from
+source and hosted on this repository's releases rather than expecting anyone to install a
+C++ toolchain. The build recipe and its verification against the CUDA binary are in
+`BUILD_NOTES.md` §9o.
 
 ## Documentation
 

@@ -95,12 +95,12 @@ rem  wrong set at download time would only be discovered over there. Together
 rem  they add about 1.1 GB against 29 GB of models, which is not worth a
 rem  choice the user could get wrong.
 rem
-rem  There is deliberately no whisper-vulkan below. whisper.cpp publishes no
-rem  Vulkan binary for Windows at all, so bin\whisper-vulkan\ is built from
-rem  source and ships inside the folder rather than being downloaded. The
-rem  recipe is in BUILD_NOTES.md section 9o. If that folder is missing, a
-rem  machine with no NVIDIA card still works: it runs the language model on
-rem  Vulkan and transcription on the CPU build.
+rem  whisper-vulkan is the odd one out. whisper.cpp publishes no Vulkan binary
+rem  for Windows at all, so that one is built from source -- the recipe is in
+rem  BUILD_NOTES.md section 9o -- and hosted on this project's own releases so
+rem  nobody has to install a C++ toolchain to get it. Without it a machine with
+rem  no NVIDIA card still works, but transcription drops to the CPU build and
+rem  costs roughly 5-10x on that stage.
 rem ---------------------------------------------------------------------------
 
 set "LLAMA_BUILD=b10852"
@@ -126,6 +126,10 @@ call :getbin "whisper-cuda" 300000000 ^
 call :getbin "whisper-cpu"  5000000   ^
   "%GH%/whisper.cpp/releases/download/%WHISPER_BUILD%/whisper-bin-x64.zip" ^
   "whisper.cpp without a GPU - 8 MB"
+
+call :getbin "whisper-vulkan" 15000000 ^
+  "https://github.com/NGJHD/Meeting-Summarizer/releases/download/whisper-vulkan-b4938/whisper-vulkan-b4938.zip" ^
+  "whisper.cpp for AMD and Intel - 18 MB"
 
 rem  The CUDA runtime is shared by both NVIDIA builds and sits in bin\ itself,
 rem  where Windows finds it on PATH for either engine.
