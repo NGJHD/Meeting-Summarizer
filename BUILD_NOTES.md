@@ -1065,7 +1065,7 @@ at `DOWNLOAD_MODELS.bat`.
 
 ## 9g. Speaker naming, voice samples, and calibrated timing
 
-### Speaker naming (PROPOSAL_MeetMemo.md §2)
+### Speaker naming
 
 After a run, the results screen lists each detected speaker with the **three longest
 things they said**, each as a playable clip, plus a name box. Clips are cut with ffmpeg
@@ -1691,7 +1691,7 @@ The middle row is the only length with no calls recorded at that length; it is b
 interpolated across two decades and will correct itself when a meeting that size is next
 processed.
 
-`ESTIMATE.md` documents the whole calculation step by step with a worked example.
+The whole calculation, step by step with a worked example, is in §9m and §9n.
 
 ### Markdown tables were not rendered
 
@@ -1726,7 +1726,8 @@ before — every other panel simply never sets `display`.
 
 ### AMD and Intel via Vulkan
 
-Implemented from `AMD_INTEL_BUILD.md`, everything except the whisper build.
+Implemented across §9o-§9p; the assessment that preceded it (`AMD_INTEL_BUILD.md`)
+has been removed now that the work is done and measured.
 
 **Binaries.** One folder per backend, all of them shipped rather than chosen at download
 time: the folder is meant to be copied to a different machine, and choosing wrong at
@@ -2009,6 +2010,127 @@ Records were keyed by model alone, so a CUDA run's tokens-per-second would have 
 applied to a Vulkan or CPU run -- a difference of an order of magnitude. The key is now
 `model@backend`; records written before this are never matched, which is correct, as they
 describe an unknown machine.
+
+## 9q. The updater, and the five traps it is built around
+
+`UPDATE_BUTTON.md` used to carry this; it was a portable write-up from two earlier apps
+and has been folded in here so the code has something real to point at.
+
+### The shape
+
+Nine steps, and every failure leaves the running install untouched:
+
+```
+  check GitHub /releases/latest  ->  compare tag with APP_VERSION
+    -> not newer: say so, stop
+    -> newer: show version and size, wait for the user
+         -> folder writable?  no: explain, change nothing
+         -> download the zip to %TEMP%, with a progress bar
+         -> unpack, verify the app is in there and its version matches the tag
+         -> write a .cmd, launch it, quit
+              the script waits for the app to let go, robocopies, restarts
+```
+
+The app never overwrites itself, because Windows holds a running executable open. That is
+the only reason step 9 needs a script at all.
+
+Two simplifications fall out of this being a Python app in a plain folder rather than a
+packaged exe: download, unpack and verify all happen **in Python before anything is
+replaced**, so the batch script only waits, copies and restarts; and there is no exe
+version to read, so verification greps `APP_VERSION` out of the downloaded
+`server/version.py` without importing it.
+
+### The release has to look like this
+
+| | |
+|---|---|
+| **Tag** | `v<version>`, matching `server/version.py` exactly |
+| **Asset** | Exactly one `.zip`. Nothing else is looked at, and two zips are refused rather than guessed at |
+| **Publish** | A real published release. `/releases/latest` skips drafts and pre-releases |
+
+The zip is the **source tree only** — `server/`, `web/`, `prompts/`, `run.bat`,
+`config.json`, the documentation. Not `bin/`, `models/` or `runtime/`: those are 30 GB,
+past GitHub's per-asset limit, and unchanged between versions anyway. robocopy without
+`/MIR` leaves them alone, which is what makes a 400 KB update possible.
+
+Anonymous GitHub API calls are rate limited to 60/hour per IP. A button nobody can press
+that fast will never see it, so no token is needed — and one must not be shipped anyway.
+
+### The five traps
+
+Four of them only appear once the thing is packaged and running for real.
+
+**1. Node/Python will not spawn a `.cmd` directly.** Since the CVE-2024-27980 fix, passing
+a `.bat` or `.cmd` as the executable is refused. `cmd.exe` is the executable and the
+script is its own argv entry:
+
+```python
+subprocess.Popen([os.environ.get("ComSpec") or "cmd.exe", "/c", str(script)], ...)
+```
+
+Never `shell=True` with an interpolated path — that is the vulnerability the fix exists
+for.
+
+**2. Do not wait with `tasklist | find`.** It works interactively and **hangs** when
+launched detached from a dying parent: `find.exe` sits forever on its end of the pipe, the
+copy never runs, and a stray console is left on the desktop. Wait on something that needs
+no pipe. This app holds `temp\running.lock` for its lifetime and the script polls
+`if not exist`, with a 60-iteration cap so a force-killed app cannot strand the update.
+
+**3. Unzip without a dependency.** Windows 10 1803 and later ship bsdtar as
+`%SystemRoot%\System32\tar.exe`, which reads zip. Always the absolute System32 path —
+`tar` on PATH may be GNU tar, which cannot. Here the unpacking happens in Python's
+`zipfile` instead, which also allows checking every member for a path that would escape
+the destination before extracting anything.
+
+**4. Copy with robocopy, not xcopy.**
+
+```bat
+robocopy "%READY%" "%TARGET%" /E /R:3 /W:2 /XF "config.json" /NFL /NDL /NJH /NJS /NP
+if errorlevel 8 ( echo failed )
+```
+
+It retries a locked file instead of giving up; it skips files whose size and timestamp
+already match; **exit codes 0–7 are all success**, so `if errorlevel 8` is the failure
+test and a plain `if errorlevel 1` would report every successful copy as a failure. No
+`/MIR` — mirroring would delete the user's models.
+
+`/XF "config.json"` is this app's addition: the operator tunes that file by hand, and
+`load_config()` merges any new keys in from `_DEFAULTS`, so a stale config loses nothing.
+
+**5. Verify before trusting.** Check the unpacked folder actually contains the app
+(`run.bat`, `server/main.py`, `server/version.py`, `web/index.html`) and that its version
+matches the tag. "Cannot read it" is treated as unknown and allowed; "read it and it
+disagrees" is a hard stop.
+
+### Details that are easy to get wrong
+
+- **Compare versions numerically.** `"1.10.0" > "1.9.0"` is false as strings. An
+  unparseable tag must answer *not newer* — never offer an update you cannot reason about.
+- **Bake paths into the script**, do not pass them as arguments. `set "TARGET=C:\Program
+  Files\X"` has no quoting left to get wrong.
+- **Only delete a staging folder you created.** The sweep checks for this app's own prefix
+  before removing anything; pointed anywhere else it would take a real folder with it.
+- **Sweep abandoned staging folders.** A machine that loses power mid-update leaves a whole
+  unpacked copy in `%TEMP%`, and the `.cmd` cannot delete itself.
+- **Check writability before the download**, not after. Finding out after 400 KB is cheap;
+  after 250 MB it is rude.
+- **Show bytes, not just a percentage.** "48.2 MB of 248.8 MB" tells the user whether it is
+  stuck.
+- **Restrict what the page may fetch.** The install endpoint refuses any URL that did not
+  come from github.com, so a compromised page cannot point the downloader elsewhere.
+- **A console window flashes** while the script runs — `DETACHED_PROCESS` beats
+  `windowsHide`. It is given `title Updating Meeting Summariser` so it reads as
+  intentional for the second it exists.
+
+### What it deliberately is not
+
+- **Not automatic.** Nothing checks on launch, nothing nags. An app that quietly replaces
+  itself is an app that breaks in the middle of someone's work.
+- **Not delta updates.** The whole zip every time — which is 400 KB here, so it does not matter.
+- **Not signed.** Nothing verifies the download beyond HTTPS to github.com and the version
+  check. That is the same trust as clicking the release link by hand, which is what this
+  replaces.
 
 ## 10. Still not measured
 

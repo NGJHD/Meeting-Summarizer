@@ -83,8 +83,8 @@ Before writing the orchestration code, run each of the following against the exa
 binaries present in `bin/` and read the output:
 
 ```
-bin\llama-server.exe --help
-bin\whisper-cli.exe --help
+bin\llama-cuda\llama-server.exe --help
+bin\whisper-cuda\whisper-cli.exe --help
 ```
 
 For every flag this document specifies, confirm it exists with that name in that build.
@@ -109,7 +109,7 @@ Audio file
                      └─> MAP   → per-chunk notes           (N calls)
                           └─> [GROUP REDUCE if N > 8]      (see §10.3)
                                └─> FINAL REDUCE            (1 call)
-                                    └─> output\<name>_summary.md
+                                    └─> output\<name>\<name>_summary.md
 ```
 
 ### 2.1 Backends
@@ -234,7 +234,7 @@ MeetingSummariser\
     reduce.py                 <- map / group reduce / final reduce
     jobs.py                   <- job state, cancellation, cleanup
     version.py                <- app name, author, version, repo. Nothing else
-    updater.py                <- the Check-for-updates button (UPDATE_BUTTON.md)
+    updater.py                <- the Check-for-updates button (BUILD_NOTES §9q)
   temp\                       <- created at runtime, always emptied
   output\
     <meeting name>\           <- one folder per meeting, never loose files
@@ -260,14 +260,16 @@ operator edits this file in Notepad; the end user never sees it.
 ```json
 {
   "llm": {
-    "model": "models/Qwen3.8-27B-UD-Q4_K_M.gguf",
+    "model": "auto",
     "ctx_size": 32768,
-    "gpu_layers": 99,
-    "cpu_ffn_regex": "blk\\.(6[0-3]|5[0-9]|4[0-9])\\.ffn_.*=CPU",
+    "gpu_layers": "auto",
+    "cpu_ffn_regex": "auto",
     "cache_type_k": "q8_0",
     "cache_type_v": "q8_0",
+    "threads": "auto",
     "port": 8080,
-    "startup_timeout_s": 180
+    "startup_timeout_s": 180,
+    "idle_timeout_s": 300
   },
   "chunking": {
     "target_tokens": 10000,
@@ -280,37 +282,59 @@ operator edits this file in Notepad; the end user never sees it.
   "thinking": {
     "map": false,
     "group_reduce": false,
-    "reduce": true
+    "reduce": true,
+    "reduce_effort": "medium"
   },
   "pipeline": {
     "concurrent_diarization": true
   },
-  "gpu": { "backend": "auto" },
-  "estimate": {
-    "transcript_tokens_per_audio_minute": 206,
-    "fixed_overhead_s": 60,
-    "buffer_fraction": 0.15
+  "gpu": {
+    "backend": "auto"
   },
   "whisper": {
     "model": "models/ggml-large-v3-turbo.bin",
     "vad_model": "models/ggml-silero-v5.1.2.bin",
     "language": "en",
-    "threads": 6
+    "threads": 5,
+    "max_context": 0,
+    "dtw": true
   },
   "diarization": {
     "enabled": true,
-    "threads": 6,
+    "threads": 5,
     "num_speakers": 0,
-    "cluster_threshold": 0.5,
+    "cluster_threshold": 0.7,
     "min_duration_on": 0.3,
-    "min_duration_off": 0.5
+    "min_duration_off": 0.5,
+    "max_speakers": 20,
+    "min_cluster_speech_s": 30,
+    "min_cluster_speech_fraction": 0.005,
+    "reassign_max_distance": 0.85,
+    "merge_centroid_distance": 0.35,
+    "min_embed_duration": 1.0,
+    "min_coverage_fraction": 0.8,
+    "embedding_cache": true
   },
-  "server": { "port": 8000 }
+  "server": {
+    "port": 8000
+  },
+  "estimate": {
+    "transcript_tokens_per_audio_minute": 206,
+    "fixed_overhead_s": 60,
+    "buffer_fraction": 0
+  }
 }
 ```
 
 `num_speakers: 0` means auto-detect. If a run produces obviously wrong speaker counts,
 the operator sets it explicitly.
+
+Everything marked `"auto"` is **detected per machine, not guessed**, and an explicit value
+always wins: `llm.model` picks the quantisation this card can hold (§13.3),
+`llm.gpu_layers` and `llm.cpu_ffn_regex` decide where the weights live (§11.1),
+`llm.threads` omits the flag so llama.cpp uses the physical core count, and `gpu.backend`
+chooses CUDA, Vulkan or CPU per engine (§2.1). The measurements behind each are in
+`BUILD_NOTES.md`.
 
 ---
 
@@ -584,20 +608,23 @@ strictly: transcribe → whisper process exits → *then* start llama-server.
 Launch:
 
 ```
-bin\llama-server.exe ^
+bin\llama-cuda\llama-server.exe ^
   -m models\Qwen3.8-27B-UD-Q4_K_M.gguf ^
   --ctx-size 32768 ^
-  --n-gpu-layers 99 ^
-  --override-tensor "blk\.(6[0-3]|5[0-9]|4[0-9])\.ffn_.*=CPU" ^
   --flash-attn on ^
   --cache-type-k q8_0 --cache-type-v q8_0 ^
   --jinja ^
-  --threads 8 ^
   --batch-size 512 --ubatch-size 512 ^
   --parallel 1 ^
   --host 127.0.0.1 --port 8080 ^
-  --no-webui
+  --no-webui ^
+  --n-gpu-layers 99 --override-tensor "blk\.(42|43|...|63)\.ffn_.*=CPU"
 ```
+
+The binary folder, the last line, and the absence of `--threads` are all decided at
+runtime — see below and §2.1. The regex shown is what a 10 GB card computes; on a 17.9 GB
+card it is one block, and on unified memory the last line becomes `--n-gpu-layers 0` with
+no regex at all and the CPU binary is used instead.
 
 **Why `--override-tensor`:** a 27B model at Q4_K_M does not fit in 16GB. This pushes the
 FFN tensors of the upper layers into system RAM while keeping attention on the GPU. It is
@@ -887,7 +914,7 @@ Single page, no framework, no bundler, no CDN references. Everything served loca
    including mid-job. Shows built-by, version and the repository, and holds the
    *Check for updates* button.
 
-   The update flow is `UPDATE_BUTTON.md` §1, with the download, unpack and verify done
+   The update flow is `BUILD_NOTES.md` §9q, with the download, unpack and verify done
    in Python before anything is replaced, so the batch script only has to wait, copy and
    restart. Every failure path leaves the installed app exactly as it was, and
    `config.json` is never overwritten — `load_config` merges new keys in from

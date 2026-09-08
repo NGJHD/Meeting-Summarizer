@@ -1,4 +1,4 @@
-"""Speaker samples and renaming (PROPOSAL_MeetMemo.md sections 2 and 3).
+"""Speaker samples and renaming (CLAUDE.md section 13, items 9 and 10).
 
 Diarization produces anonymous clusters. The reduce prompt infers real names
 where the transcript gives it evidence, but there is a hard ceiling: if nobody

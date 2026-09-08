@@ -29,7 +29,6 @@ update.log
 # ---- development only, not shipped --------------------------------------
 tools/
 work/
-UPDATE_BUTTON.md
 
 # ---- editor / OS noise ---------------------------------------------------
 __pycache__/

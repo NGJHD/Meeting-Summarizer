@@ -6,7 +6,7 @@ rule is about the pipeline, which must work with the adapter disabled, and it
 still does. An explicit "check for updates" is a deliberate, documented
 exception -- nothing here runs on startup, on a timer, or in the background.
 
-The workflow is UPDATE_BUTTON.md section 1, with two simplifications that fall
+The workflow is BUILD_NOTES.md section 9q, with two simplifications that fall
 out of this being a Python app in a plain folder rather than a packaged exe:
 
 - Download, unpack and verify all happen **in Python, before anything is
@@ -15,7 +15,7 @@ out of this being a Python app in a plain folder rather than a packaged exe:
 - Nothing is overwritten until the staged copy has been verified. Every failure
   path leaves the installed app exactly as it was.
 
-The traps in UPDATE_BUTTON.md section 4 are respected where they apply:
+The five traps in BUILD_NOTES.md section 9q are respected where they apply:
 cmd.exe is the executable and the script is a separate argv entry (4.1); the
 wait is on a marker file and needs no pipe, so there is no `find.exe` to hang
 (4.2); robocopy retries locked files and skips unchanged ones (4.4); and the
@@ -156,7 +156,7 @@ def check() -> dict:
 
 
 def is_writable() -> bool:
-    """Check before the download, not after (UPDATE_BUTTON.md section 5)."""
+    """Check before the download, not after (BUILD_NOTES.md section 9q)."""
     probe = config.ROOT / (".write-probe-%d" % os.getpid())
     try:
         probe.write_text("x", encoding="utf-8")
@@ -293,7 +293,7 @@ def install(url: str, size_bytes: int, tag: str, port: int) -> None:
         script = _write_script(stage, ready, port)
         # cmd.exe is the executable and the script is its own argument: never
         # the script as the executable, never shell=True with an interpolated
-        # path (UPDATE_BUTTON.md section 4.1).
+        # path (BUILD_NOTES.md section 9q, trap 1).
         subprocess.Popen(
             [os.environ.get("ComSpec") or "cmd.exe", "/c", str(script)],
             creationflags=DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
@@ -349,7 +349,7 @@ def _write_script(stage: Path, ready: Path, port: int) -> Path:
 
     Every path is baked in rather than passed as an argument: the install
     folder can contain spaces, and a `set "X=..."` line has no quoting left to
-    get wrong (UPDATE_BUTTON.md section 5).
+    get wrong (BUILD_NOTES.md section 9q).
     """
     excludes = " ".join('"%s"' % name for name in version.PRESERVE)
     script = stage / "apply-update.cmd"
@@ -365,7 +365,7 @@ set "STAGE={stage}"
 echo Updating to a new version... >"%LOG%"
 
 rem Wait for the app to let go. `if exist` needs no pipe, so there is no
-rem find.exe to hang the way UPDATE_BUTTON.md section 4.2 describes.
+rem find.exe to hang the way BUILD_NOTES.md section 9q, trap 2 describes.
 set /a TRIES=0
 :waitloop
 if not exist "%MARK%" goto copy

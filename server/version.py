@@ -1,7 +1,7 @@
 """App identity and version arithmetic.
 
 The only file that changes when this code is reused for a different app
-(UPDATE_BUTTON.md section 3), and the only place the version number lives.
+(BUILD_NOTES.md section 9q), and the only place the version number lives.
 
 Everything here is pure -- no network, no filesystem -- so the comparison logic
 can be exercised without downloading anything.
