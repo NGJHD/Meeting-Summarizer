@@ -1926,9 +1926,26 @@ Generation identical, prompt processing a third slower with the GPU involved. So
 `placement()` has two regimes and no middle ground: FFN split on a dedicated card, the
 processor on AMD unified memory.
 
-Scoped to AMD, not to UMA generally. Both UMA measurements come from one device, and the
-Intel iGPU laptop is reported working -- "it works today" outranks an argument by analogy,
-so Intel keeps the FFN split until somebody benchmarks it.
+Then benchmarked on the Intel iGPU laptop, which settled it the same way and more
+sharply -- offloading buys 12% on the prompt and costs 2.8x on generation:
+
+| `-ngl` | prompt | generation |
+|---|---|---|
+| 0 | 1.61 t/s | **1.36 t/s** |
+| 15 | 1.67 t/s | 0.87 t/s |
+| 99 | **1.80 t/s** | 0.48 t/s |
+
+Offloading would only pay if a call's prompt exceeded 21x its output. Ours are 6.7x (map)
+and 1.8x (reduce), so the processor wins every call on that machine too. Two vendors,
+different drivers and different matrix hardware, same answer -- so the rule is now UMA-wide
+rather than AMD-only. The coopmat workaround stays AMD-only: setting it on the Intel
+laptop changed nothing at any `-ngl`, which is what "not needed here" looks like.
+
+**That laptop cannot run this model, though.** At 1.61 t/s prefill and 1.36 t/s
+generation, a 4-hour meeting is **~15 hours of LLM** -- 2 hours per map call, 6 of them,
+plus the reduce. Its transcription is fine; the 27B is not viable there. Notably it is
+~20x slower than the Radeon 780M on the same model, which is far more than an iGPU
+generation gap and points at the model not fitting in RAM.
 
 ### Latency the investigation exposed
 

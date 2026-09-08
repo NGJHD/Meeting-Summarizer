@@ -595,7 +595,7 @@ other. `hardware.placement()` decides:
 | Machine | `--n-gpu-layers` | `--override-tensor` |
 |---|---|---|
 | Dedicated GPU | `99` | FFN blocks that do not fit, computed from measured VRAM |
-| AMD unified memory | `0` | none |
+| Unified memory | `0` | none |
 
 Keeping the FFN split on a dedicated card is measured, not assumed. On a 10 GB
 card with the 10.9 GB model, at identical VRAM occupancy:
@@ -622,6 +622,10 @@ Generation unchanged -- an integrated GPU shares the CPU's memory bus, so a
 bandwidth-bound workload gains nothing -- and prompt processing a third *slower*,
 because every batch is copied across for a handful of resident layers. So the
 processor, and no offload flags at all.
+
+Confirmed on an Intel iGPU, where offloading buys 12% on the prompt and costs
+2.8x on generation (1.36 → 0.48 tok/s from `-ngl 0` to `-ngl 99`). It would only
+pay if a call's prompt exceeded 21x its output; ours are 6.7x and 1.8x.
 
 **The regex is a starting point, not a tuned value.** After the first successful run,
 report peak VRAM. If there is headroom, move layers back to GPU; if it OOMs, move more to

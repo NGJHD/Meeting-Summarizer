@@ -286,13 +286,20 @@ def placement(key: str, gpu: dict) -> tuple[str, str]:
 
     Generation unchanged, prompt processing a third slower. So: the processor.
 
-    Scoped to AMD, not to unified memory in general. Both measurements above
-    are from one Radeon 780M. An Intel integrated GPU is a different driver
-    with different matrix hardware, and the one we have reports is working --
-    so it keeps the FFN split until somebody benchmarks it, on the principle
-    that "it works today" outranks an argument by analogy.
+    Confirmed on Intel too, where it is even more pronounced -- more layers on
+    the GPU buy 12% on the prompt and cost 2.8x on generation:
+
+        -ngl 0     prompt 1.61 tok/s   generation 1.36 tok/s
+        -ngl 15    prompt 1.67 tok/s   generation 0.87 tok/s
+        -ngl 99    prompt 1.80 tok/s   generation 0.48 tok/s
+
+    Offloading would only pay if a call's prompt were more than 21x its output.
+    Ours are 6.7x (map) and 1.8x (reduce), so the processor wins every call.
+
+    Two vendors, opposite hardware, same answer: on unified memory the GPU has
+    no bandwidth advantage to offer and the split costs synchronisation.
     """
-    if gpu.get("uma") and gpu.get("vendor") == "amd":
+    if gpu.get("uma"):
         return "0", ""
     return "99", offload_regex(key, gpu["vram_mb"])
 
