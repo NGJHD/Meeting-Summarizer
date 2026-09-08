@@ -22,6 +22,10 @@ calibration.json
 # Written by run.bat, pointing at whichever port it settled on.
 Open Meeting Summariser.url
 
+# Written by the update script and the writable-folder probe.
+update.log
+.write-probe-*
+
 # ---- development only, not shipped --------------------------------------
 tools/
 work/
