@@ -17,16 +17,47 @@ from .jobs import Cancelled, Job, JobError
 
 PLACEHOLDER = "_(This section of the recording could not be summarised.)_"
 
+# Thinking and the document come out of this same allowance, so it has to hold
+# both. Section 11.2 specified 8000, which measurement showed is too tight at
+# the top of the supported range: on a real 3h51m recording the reduce used
+# ~3440 thinking tokens and then wrote a 4158-token document -- 7598 of 8000,
+# 95% of the cap. At 5 hours it would bind, and what gets truncated is the
+# document, which is worse than the empty-completion failure the thinking
+# budget exists to prevent.
+#
+# 12000 leaves the 4000-token thinking budget intact and gives the document
+# 8000 against a measured worst case of 4158. It costs nothing on our own
+# context -- 7997 prompt + 12000 + 2000 = 21997 against 32768 -- and only
+# makes _fit_for_final tier earlier on a small external one, which is the
+# correct conservative behaviour there (BUILD_NOTES section 9x).
+REDUCE_MAX_TOKENS = 12000
+
 
 def _guard(job: Job, server: llm.LlamaServer, prompt: str, max_out: int, cfg: dict) -> int:
     """Return the prompt's token count, refusing to send one that will not fit."""
-    ctx = int(cfg["llm"].get("ctx_size", 32768))
+    # The server's context, not ours: with the Port option it was started by
+    # somebody else and may be smaller (see llm.LlamaServer.ctx_size).
+    ctx = server.ctx_size
     n = server.token_count(prompt)
     if not chunker.fits(n, max_out, ctx):
+        # Name the real cause. On our own server this genuinely is a recording
+        # too large to consolidate; on a server somebody else started with a
+        # small context it is not, and telling the user to shorten the meeting
+        # would send them to fix the wrong thing.
+        if server.external and ctx < int(cfg["llm"].get("ctx_size", 32768)):
+            message = (
+                "The language model on port %d was started with too small a "
+                "context window for a recording this long. Restart it with a "
+                "larger one, or choose High Quality or Low Quality instead. "
+                "The full transcript was still saved." % server.port
+            )
+        else:
+            message = ("That recording produced more material than the model can "
+                       "work with in one pass. The full transcript was still saved.")
         raise JobError(
-            "That recording produced more material than the model can work with "
-            "in one pass. The full transcript was still saved.",
-            "prompt %d + output %d + 2000 exceeds ctx_size %d" % (n, max_out, ctx),
+            message,
+            "prompt %d + output %d + 2000 exceeds ctx_size %d%s"
+            % (n, max_out, ctx, " (external server)" if server.external else ""),
         )
     return n
 
@@ -189,7 +220,7 @@ def run_final_reduce(
     template = llm.load_prompt(name)
     think = bool(cfg["thinking"].get("reduce", True))
     effort = str(cfg["thinking"].get("reduce_effort", "medium"))
-    max_out = 8000
+    max_out = REDUCE_MAX_TOKENS
 
     label = "minutes" if mode == "minutes" else "summary"
     if total > 1:
@@ -234,9 +265,9 @@ def _fit_for_final(
     The chunk-count threshold is a proxy for size, and a good one, but notes
     can run long individually. This measures the real assembled prompt.
     """
-    ctx = int(cfg["llm"].get("ctx_size", 32768))
+    ctx = server.ctx_size
     template = llm.load_prompt("reduce_minutes" if job.mode == "minutes" else "reduce_summary")
-    max_out = 8000
+    max_out = REDUCE_MAX_TOKENS
 
     for attempt in range(4):
         prompt = llm.fill(

@@ -17,7 +17,7 @@ echo.
 echo   Meeting Summariser - downloading models
 echo   ---------------------------------------
 echo.
-echo   Total download: about 30 GB - the Python runtime, ffmpeg, 6 models
+echo   Total download: about 28 GB - the Python runtime, ffmpeg, 6 models
 echo   and the inference binaries for every graphics vendor.
 echo   This will take a while.
 echo   Already-downloaded files are skipped, so it is safe to re-run
@@ -64,9 +64,9 @@ call :get "models\Qwen3.8-27B-UD-IQ3_XXS.gguf" 10000000000 ^
   "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/4ca720788d1e01f1bff70c033e0d0028fd02e502/Qwen3.8-27B-UD-IQ3_XXS.gguf?download=true" ^
   "Language model, Low Quality - 10.9 GB"
 
-call :get "models\Qwen3.8-27B-UD-Q4_K_M.gguf" 16000000000 ^
-  "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/4ca720788d1e01f1bff70c033e0d0028fd02e502/Qwen3.8-27B-UD-Q4_K_M.gguf?download=true" ^
-  "Language model, High Quality - 16.5 GB, this is the long one"
+call :get "models\Qwen3.8-27B-UD-IQ4_XS.gguf" 14000000000 ^
+  "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/4ca720788d1e01f1bff70c033e0d0028fd02e502/Qwen3.8-27B-UD-IQ4_XS.gguf?download=true" ^
+  "Language model, High Quality - 14.3 GB, this is the long one"
 
 rem  The speaker segmentation model is only published inside an archive.
 if exist "models\segmentation-3.0.onnx" (

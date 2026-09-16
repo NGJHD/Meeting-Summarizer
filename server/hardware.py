@@ -1,11 +1,13 @@
 """GPU detection and LLM model selection.
 
 Which quantisation to run is a property of the machine, not a preference, so
-it is detected rather than configured. Q4_K_M is better -- it was the only
-variant to get the election-rate table right (BUILD_NOTES §9h) -- but its
-16.5 GB of weights plus a 32k KV cache needs a card that can hold most of it.
-Below that, IQ3_XXS at 10.9 GB scores the same on term recall and runs roughly
-twice as fast when the larger model would be thrashing over PCIe.
+it is detected rather than configured. UD-IQ4_XS is the High Quality choice:
+13.27 GiB of weights, which is small enough to sit entirely on a 16 GB card
+alongside the KV cache and its own multi-token-prediction draft context. Five
+runs each against Q4_K_M, Q4_K_S and a second IQ4_XS build found no quality
+difference that reproduces, and a 3.4-3.6x speed advantage that does
+(BUILD_NOTES §9z). Below the threshold, IQ3_XXS at 10.9 GB runs where the
+larger file would be thrashing over PCIe.
 
 The user can still override the choice in the UI. The detection picks the
 default; it does not overrule anybody.
@@ -24,7 +26,14 @@ CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 # 15 GB, not 16: cards advertised as 16 GB report anywhere from 15.8 GB down
 # once the driver has taken its share, and a threshold that a 16 GB card fails
 # would be worse than useless.
-Q4_MIN_VRAM_MB = 15000
+#
+# Deliberately unchanged when High Quality moved from Q4_K_M (15.33 GiB) to
+# UD-IQ4_XS (13.27 GiB). The smaller file would clear a lower bar, but lowering
+# it would hand High Quality to cards that have never run it here, and the
+# point of the switch was to make the *same* machines faster rather than to
+# widen who gets the large model. Lower it only with measurements from a
+# 12-14 GB card in hand.
+HIGH_MIN_VRAM_MB = 15000
 
 # Headroom for the KV cache at ctx_size 32768 with q8_0 keys and values, plus
 # llama.cpp's compute buffers.
@@ -39,7 +48,10 @@ Q4_MIN_VRAM_MB = 15000
 # Measured: IQ3_XXS (10.9 GB) ran on this 10 GB card with only 8 layers
 # offloaded, peaking at 9.8 GB. This is an estimate and a starting point --
 # set `llm.cpu_ffn_regex` explicitly in config.json to override it.
-OVERHEAD_GB = 1.5
+#
+# Confirmed in GiB on the 16 GB card: IQ3_XXS is 10.18 GiB of weights and sat
+# at 11.69 GiB resident with everything on the GPU, so 1.5 GiB it is.
+OVERHEAD_GIB = 1.5
 
 # Qwen3.8-27B has 64 transformer blocks, 0-63.
 NUM_LAYERS = 64
@@ -49,11 +61,15 @@ FFN_FRACTION = 0.67
 
 MODELS = [
     {
-        "key": "q4_k_m",
-        "file": "Qwen3.8-27B-UD-Q4_K_M.gguf",
-        "label": "High Quality: Qwen3.8-27B-UD-Q4_K_M",
-        "size_gb": 16.5,
-        "min_vram_mb": Q4_MIN_VRAM_MB,
+        "key": "iq4_xs",
+        "file": "Qwen3.8-27B-UD-IQ4_XS.gguf",
+        "label": "High Quality: Qwen3.8-27B-UD-IQ4_XS",
+        "size_gb": 14.3,
+        "min_vram_mb": HIGH_MIN_VRAM_MB,
+        # Multi-token prediction, from the layer inside the file itself
+        # (blk.64.nextn.*). Applied only when the model fits without offload --
+        # see llm.LlamaServer.spec_type.
+        "spec": "draft-mtp",
     },
     {
         "key": "iq3_xxs",
@@ -61,10 +77,52 @@ MODELS = [
         "label": "Low Quality: Qwen3.8-27B-UD-IQ3_XXS",
         "size_gb": 10.9,
         "min_vram_mb": 0,
+        "spec": "draft-mtp",
     },
 ]
 
-BY_KEY = {m["key"]: m for m in MODELS}
+# Models an older install may still have on disk. The update payload carries
+# no `models\` (BUILD_NOTES 9q), so a copy updating from 1.0.x keeps the
+# Q4_K_M it downloaded and never receives UD-IQ4_XS until DOWNLOAD_MODELS.bat
+# is run again. Requiring a file the updater cannot deliver would stop those
+# installs from starting at all, so Q4_K_M stays selectable while it is
+# present -- it is a perfectly good model, just slower (BUILD_NOTES 9z).
+LEGACY_MODELS = [
+    {
+        "key": "q4_k_m",
+        "file": "Qwen3.8-27B-UD-Q4_K_M.gguf",
+        "label": "High Quality (older): Qwen3.8-27B-UD-Q4_K_M",
+        "size_gb": 16.5,
+        "min_vram_mb": HIGH_MIN_VRAM_MB,
+        "spec": "draft-mtp",
+    },
+]
+
+ALL_MODELS = MODELS + LEGACY_MODELS
+BY_KEY = {m["key"]: m for m in ALL_MODELS}
+
+
+def _by_preference(models: list) -> list:
+    """Most capable first, which is the order the dropdown and the default use.
+
+    `min_vram_mb` descending: it is what the original two-entry list encoded by
+    hand, and appending a legacy entry broke it -- an install holding both
+    Q4_K_M and IQ3_XXS was offered Low Quality on a 16 GB card because the
+    legacy entry sorted last. Stable, so a shipped model still precedes a
+    legacy one of the same tier.
+    """
+    return sorted(models, key=lambda m: -m["min_vram_mb"])
+
+
+def available_models() -> list:
+    """Shipped models, plus any legacy one actually on disk."""
+    return _by_preference([m for m in ALL_MODELS
+                           if m in MODELS or model_path(m["key"]).exists()])
+
+
+def any_model_present() -> bool:
+    """Is there at least one language model to run?"""
+    return any(model_path(m["key"]).exists() for m in ALL_MODELS)
 
 
 # Which inference backend to run. CUDA is fastest where it exists; Vulkan is
@@ -374,15 +432,21 @@ def choose_key(vram_mb: int) -> str:
     the CPU there (see gpu_layers_for), where the smaller model is roughly
     twice as fast and leaves the machine usable.
     """
+    # Only files that are actually here. An install updated from 1.0.x has
+    # Q4_K_M and no UD-IQ4_XS, and defaulting to a model it cannot load would
+    # fail at the LLM stage, an hour in.
+    here = _by_preference([m for m in ALL_MODELS if model_path(m["key"]).exists()])
+    if not here:
+        return MODELS[-1]["key"]          # nothing on disk; report the default
     if detect_gpu().get("uma"):
-        return MODELS[-1]["key"]
+        return here[-1]["key"]
     # Unlike placement(), this applies to every unified-memory device, not just
-    # AMD: whatever a shared-memory GPU advertises, a 16.5 GB model in RAM the
+    # AMD: whatever a shared-memory GPU advertises, a large model in RAM the
     # operating system is also using is the wrong choice on any of them.
-    for model in MODELS:
+    for model in here:
         if vram_mb >= model["min_vram_mb"]:
             return model["key"]
-    return MODELS[-1]["key"]
+    return here[-1]["key"]
 
 
 def resolve_key(requested: str, vram_mb: int | None = None) -> str:
@@ -398,6 +462,23 @@ def model_path(key: str):
     return config.MODELS / BY_KEY[key]["file"]
 
 
+def model_gib(key: str) -> float:
+    """The weights' real size in GiB, measured from the file where possible.
+
+    The table's `size_gb` figures are decimal gigabytes -- bytes / 1e9, which
+    is how model files are advertised -- while `vram_mb / 1024` is GiB. Mixing
+    them overstated every model by 7% and offloaded more than it had to: on a
+    16311 MiB card Q4_K_M was pushed to twelve FFN blocks where six is enough,
+    and the whole measured cost of the High Quality default in BUILD_NOTES 9v
+    is the offload. Stat the file so the number is neither unit-confused nor
+    stale when a file is replaced.
+    """
+    path = model_path(key) if key in BY_KEY else None
+    if path is not None and path.exists():
+        return path.stat().st_size / float(2 ** 30)
+    return BY_KEY[key]["size_gb"] * 1e9 / float(2 ** 30)
+
+
 def offload_regex(key: str, vram_mb: int) -> str:
     """How much of the FFN stack has to live in system RAM on this card.
 
@@ -406,19 +487,19 @@ def offload_regex(key: str, vram_mb: int) -> str:
     VRAM and the actual file size is the same idea, applied honestly: keep
     everything on the GPU that fits, and push down only the excess.
     """
-    model = BY_KEY[key]
     if vram_mb <= 0:
         # No GPU information. Assume the worst rather than failing to allocate.
         return _regex_for(40)
 
-    available_gb = vram_mb / 1024.0
-    needed_gb = model["size_gb"] + OVERHEAD_GB
-    deficit_gb = needed_gb - available_gb
-    if deficit_gb <= 0:
+    # Both sides in GiB. See model_gib: they used not to be.
+    available = vram_mb / 1024.0
+    size = model_gib(key)
+    deficit = (size + OVERHEAD_GIB) - available
+    if deficit <= 0:
         return ""
 
-    per_layer_gb = model["size_gb"] * FFN_FRACTION / NUM_LAYERS
-    layers = min(NUM_LAYERS, int(deficit_gb / per_layer_gb) + 1)
+    per_layer = size * FFN_FRACTION / NUM_LAYERS
+    layers = min(NUM_LAYERS, int(deficit / per_layer) + 1)
     return _regex_for(NUM_LAYERS - layers)
 
 
@@ -438,9 +519,16 @@ def describe(vram_mb: int) -> dict:
     """Everything the UI needs to show and explain the model choice."""
     recommended = choose_key(vram_mb)
     gpu = detect_gpu()
+    external, port = config.external_llm()
     return {
         "vram_mb": vram_mb,
+        # What this card suggests, which is what the note under the dropdown
+        # explains. Kept separate from `selected`: the two differ exactly when
+        # the user has chosen a port, and the note should still say what the
+        # detection found rather than fall silent.
         "recommended": recommended,
+        "selected": "external" if external else recommended,
+        "external": {"enabled": external, "port": port},
         "vendor": gpu["vendor"],
         "device": gpu["device"],
         # Reported per engine: they are not shipped in step, so a machine can
@@ -454,6 +542,6 @@ def describe(vram_mb: int) -> dict:
                 "available": model_path(m["key"]).exists(),
                 "size_gb": m["size_gb"],
             }
-            for m in MODELS
+            for m in available_models()
         ],
     }

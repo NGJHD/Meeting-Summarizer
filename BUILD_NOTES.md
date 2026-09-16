@@ -357,7 +357,10 @@ The GGUF's embedded chat template settles this without needing a server experime
   llama-server. The value must therefore be validated before dispatch, not passed
   through from config unchecked. Exposed as `thinking.reduce_effort`.
 - `--reasoning-budget` exists at server level and defaults to `-1` (unrestricted).
-  Leaving it unset, as section 11.1 advises, is correct: per-request control governs.
+  Section 11.1 advises leaving it unset on the grounds that per-request control
+  governs. **That was measured and is wrong** -- see section 9t. Per-request control
+  over the *budget* does not exist in this build: `enable_thinking` and
+  `reasoning_effort` are per-request, the budget is not. The flag is now set.
 
 **Now verified against a running server.** The round-trip check section 11.2 asks for:
 
@@ -2329,11 +2332,335 @@ update button cannot deliver it.
 
 ---
 
+## 9t. The reasoning budget
+
+Thinking and the document come out of one allowance. Without a cap the reduce can spend
+all of it reasoning and return `finish_reason: length` with **empty content**, which
+`llm.chat` retries twice and then fails the job on — after transcription, diarization and
+the whole map stage have been paid for. Reproduced at 400 tokens: 1700 chars of reasoning,
+zero of content.
+
+**The cap is a launch flag, and only a launch flag.** Build 10797 (`832fd6f17`):
+
+```
+--reasoning-budget N              -1 unrestricted, 0 immediate end, N>0 a token budget
+--reasoning-budget-message MSG    injected before the end-of-thinking tag when N is hit
+```
+
+Section 11.2 warned it might disable thinking globally. It does not: with a budget set,
+`enable_thinking: false` still returns 0 reasoning tokens and `true` still thinks. Map and
+group-reduce are unaffected.
+
+**`reasoning_control` in the request body is accepted and ignored.** Against a server
+launched with `--reasoning-budget 60`, requests asking for 2000 came back at 298 / 318 /
+276 / 261 chars — all the server's 60. It was wired up, measured doing nothing, and
+removed. Do not re-add it.
+
+**So an external server (§9u) is capped only if whoever started it said so.** Hence the
+second half of the fix, which needs no cooperation: an empty completion with
+`finish_reason: length` is retried **with thinking off** rather than repeated. Measured:
+0 tokens → retry → 1587 chars of document.
+
+`thinking.reduce_budget_tokens` sets it; 4000 is measured-correct (§9x).
+
+---
+
+## 9u. "Port": using a llama-server we did not start
+
+Third entry in the Model dropdown. Reveals a port box (default **9931**, which is what
+llama-server is moving its own default to) and sends every LLM call to `127.0.0.1:<port>`.
+Only `/tokenize` and `/v1/chat/completions` go there; ffmpeg, whisper, diarization and
+merge all stay local.
+
+| | our server | a server on a port |
+|---|---|---|
+| start | spawn, poll `/health` for `startup_timeout_s` (180 s) | poll for 10 s, then fail plainly |
+| stop | `taskkill /F /T` | **nothing** — it was running before this job |
+| cancel | abort request, then kill | abort request only |
+| placement, budget | ours to choose | not ours |
+
+The short attach timeout is deliberate: ours has 16 GB to read off a cold disk, theirs is
+either up or it is not.
+
+**The context is theirs too.** `llm.ctx_size` describes the server *we* launch. The
+overflow guard in `reduce.py` exists to force another group-reduce tier rather than send a
+prompt that cannot fit, and measured against the wrong number it does not guard at all.
+`LlamaServer.ctx_size` reads the running server's `/props`, and `chunker.build_chunks`
+shrinks `target_tokens` to the window that actually exists. `_ctx_from_props` tries
+`default_generation_settings.n_ctx`, then `.params.n_ctx`, then the top level, and returns
+0 (falling back to ours) rather than guessing — llama.cpp has moved the field between
+builds, and `/props` returns `{"error": ...}` while a model is still loading.
+
+This is not hypothetical: a 4-hour reduce is a 7997-token prompt, and `7997 + 12000 + 2000`
+does not fit a server started with `-c 16384`.
+
+**Persistence.** Written to `config.json` on *change*, not on Process. Only
+`llm.external.enabled` and `llm.external.port`, into a *raw* read of the file — writing the
+merged config back would bake every current default in and freeze it against later changes
+to `_DEFAULTS`. Picking High or Low clears the flag so detection runs again; the port
+number survives either way.
+
+`run.bat` skips its two `*.gguf` preflight checks when the flag is set — 25 GB of the
+download that Port does not need. It asks `config.json` through Python rather than
+pattern-matching, because `"enabled": true` also appears under `diarization`.
+
+Timings are filed under `external:<port>`, not `<model>@<backend>`.
+
+**Verified** against the operator's own `C:\llama` server (IQ2_S, `-c 16384`, llama.cpp
+b10819 — *newer* than ours): full run in 2m58s, correct context detected, and **cancel left
+their server running and healthy**. That build reports `reasoning_format: none`, so
+thinking arrives as inline `<think>` tags rather than `reasoning_content` — the first time
+§11.2's belt-and-braces `strip_thinking` has actually been needed.
+
+---
+
+## 9v. Quantisation comparison — method
+
+Superseded on findings by §9z, which is the one to read. Kept for the method and for two
+results that still stand.
+
+Same 34-minute council meeting, cached transcript and diarization, minutes mode, scored
+against the official published minutes. Each variant placed the way the shipped app would
+place it. `tools\llm_compare.py` for single runs, `tools\llm_consistency.py` for repeats.
+
+**MTP is worth roughly 50%.** The i1-IQ4_XS build is 24% *larger* than IQ3_XXS and 51%
+faster (37.4 vs 24.7 tok/s). At equal settings a larger model is never faster, so the gain
+is the speculative decoding. Confirmed by `common_speculative_init_result: creating MTP
+draft context` in the log, and by its absence: without `--spec-type` the loader prints
+fifteen `model has unused tensor blk.64.nextn.* -- ignoring` warnings. The tensors ship in
+the file either way. MTP is lossless — draft-and-verify, so accepted tokens are the ones
+the target model would have produced.
+
+**Term recall measures coverage, not correctness.** It counts capitalised ground-truth
+words appearing anywhere, so a document scores for "Information Officers" even in the
+sentence that attaches the wrong figure to them. Worse, the denominator lies: of the
+council meeting's 49 terms, **14 are not in the transcript at all** (the ASR wrote
+"Kaczynski" for Kuczynski, "Fuel" for Fuhl; the rest were never spoken). The reachable
+ceiling is 35, not 49 — and 119 of 149, not 149, on the planning meeting.
+
+---
+
+## 9w. Gigabytes against gibibytes
+
+`offload_regex` compared decimal GB against GiB:
+
+```python
+available_gb = vram_mb / 1024.0        # GiB   -- 16311 MiB -> 15.93
+needed_gb    = model["size_gb"] + 1.5  # GB    -- Q4_K_M    -> 18.00
+```
+
+That overstates every model by ~7%, spent entirely on offloading blocks that would have
+fitted. `model_gib()` now stats the file, so the number is neither unit-confused nor stale
+when a file is replaced.
+
+| | advertised | real | offload before | after |
+|---|---|---|---|---|
+| Q4_K_M | 16.5 GB | 15.33 GiB | 12 blocks | **6** |
+| Q4_K_S | 15.4 GB | 14.30 GiB | 7 blocks | **none** |
+
+Worth 174s → 125s on map and 429s → 326s on reduce for Q4_K_M, identical output. The
+offload *is* the cost of a large model, so the unit has to be right.
+
+`OVERHEAD_GIB = 1.5` is confirmed in the right unit: IQ3_XXS is 10.18 GiB of weights and
+sat at 11.69 GiB resident with everything on the GPU.
+
+**Caveat.** The arithmetic sizes against *total* VRAM; the card reports 16310 MiB but only
+~15172 MiB free once the desktop has its share, and llama.cpp says so
+(`projected to use 15258 MiB vs. 15022 MiB of free device memory`). It works because
+llama.cpp mmaps the weights and pages the excess, and it measured faster this way — but a
+model at the edge will page if something else claims VRAM. Erring toward less offload is
+the safer direction: over-offloading guarantees CPU execution for layers that would have
+fitted.
+
+---
+
+## 9x. The reduce's token allowance
+
+`REDUCE_MAX_TOKENS` is **12000**, not section 11.2's 8000. Measured on the cached 3h51m
+transcript, thinking uncapped:
+
+```
+5 chunks -> 7298 tokens of notes -> one reduce (7997-token prompt)
+thinking   ~3440 tokens        document 4158 tokens        total 7598 of 8000 = 95%
+```
+
+**4000 is the right thinking budget** — uncapped, the model asked for 3440 and stopped by
+itself. The *document* is what scales with recording length (2100 tokens at 34 minutes,
+4158 at 3h51m), so 8000 binds at five hours and what gets truncated is the document, which
+is worse than the failure §9t prevents. Two of four variants later exceeded 8000 at 3h51m.
+
+12000 costs nothing on our context (`7997 + 12000 + 2000 = 21997` against 32768) and only
+makes `_fit_for_final` tier earlier against a small external one. Both the request and the
+fit check read the same constant; if they disagree the tiering is decided against a number
+the request does not use.
+
+**Map calls never think** — every one logged `0 reasoning chars`. The budget applies to one
+call per document.
+
+Two traps worth keeping:
+
+- **A label is not a model key.** A probe set `job.model_key = "budget-probe"` expecting the
+  external path; `LlamaServer.__init__` reads any non-empty key other than `"external"` as
+  an explicit choice of one of *our* models, so it took the local path and filed six calls
+  under the real `q4_k_m@cuda` key, which had to be deleted from `calibration.json` by
+  hand. `tools\llm_consistency.py` uses `compare-<tag>` plus `external.enabled: false`.
+- **Cached transcripts need their VAD timeline.** `parse_json` with an empty `VadTimeline`
+  leaves timestamps in VAD-compressed time, where silences are stripped and
+  `merge.TURN_GAP_S` can rarely fire — six turns for a 4-hour meeting, and chunks of 19169
+  tokens against a 10000 target. Production rebuilds the timeline from whisper's stderr.
+
+---
+
+## 9y. The two IQ4_XS builds are different files
+
+Same architecture, same `file_type` 30, same MTP tensors — different importance matrix and
+size. Do not treat a result for one as a result for the other.
+
+| | size | imatrix | chunks |
+|---|---|---|---|
+| `Qwen3.8-27B-i1-IQ4_XS-GGUF-Smaller` | 12.61 GiB | mradermacher/ubergarm | 319 |
+| **`Qwen3.8-27B-UD-IQ4_XS`** | **13.27 GiB** | Unsloth's own | **1251** |
+
+**MTP costs about 700 MiB**, which is what makes it conditional (§9aa). UD-IQ4_XS at 32k
+with `--spec-type draft-mtp`:
+
+```
+model 13061 MiB + KV 1088 + recurrent 598 + compute 240
+MTP draft context: KV 128 MiB + compute 130 MiB
+total 15688 MiB of 16311
+```
+
+The recurrent-state allocation grows from 150 MiB to 598 MiB when the draft context is
+added; the rest is the draft's own KV and compute buffers.
+
+The KV cache is small because Qwen3.8-27B is a **hybrid**: `full_attention_interval = 4`,
+so only 16 of 65 layers keep a KV cache at all and the rest hold a fixed-size recurrent
+state. 32k context costs ~1.24 GiB, not the 6-8 GiB a conventional 27B would need.
+
+---
+
+## 9z. Five runs each — what reproduces and what does not
+
+`tools\llm_consistency.py`. Server started once per variant and reused for every repeat, so
+repeats differ only in sampling.
+
+**Council meeting, n = 5:**
+
+| Variant | GiB | Offload | MTP | map s | reduce s | terms (range) | rate table | timestamps |
+|---|---|---|---|---|---|---|---|---|
+| Q4_K_M | 15.33 | 6 blocks | — | 116 | 295 | 31 (30–32) | **5/5** | 3 (0–14) |
+| Q4_K_S | 14.30 | none | — | 65 | 170 | 30 (29–32) | **2/5** | 10 (6–13) |
+| **UD_IQ4_XS** | 13.27 | none | yes | **34** | **79** | 29 (26–31) | **5/5** | 4 (0–12) |
+| i1_IQ4_XS | 12.61 | none | yes | 36 | 100 | 31 (30–33) | **5/5** | 2 (0–8) |
+
+**Reproduces:** speed, exactly — it is set by file size and offload, not sampling. Term
+counts, within a 29–31 band that separates nobody. The mayor's name, 20/20 runs.
+
+**Does not reproduce: timestamp counts.** Q4_K_M produced 0, 0, 1, 14, 0. Every variant
+does this. Never judge a model on it.
+
+**Q4_K_S is the one real failure** — the election-rate table right in only 2 of 5, where the
+others managed 5 of 5. By eye: `"$250 (election-day info officers"` — §9h's characteristic
+error (amounts shifted one role up) appearing in a **4-bit** model, repeatably.
+
+**n = 1 is worthless here except for timing.** Single runs said i1_IQ4_XS failed the rate
+table (5/5 over five runs), Q4_K_S passed it (2/5), and Q4_K_S lost the mayor's name (5/5).
+All three reversed.
+
+**3h51m planning meeting, n = 1 each** (149 terms, 119 reachable): terms 64–67 for all
+four, no separation; the speed ratio holds at length (UD_IQ4_XS 375 s against Q4_K_M's
+1350 s, 3.6x). *Measured under the old 8000-token cap — not comparable with the IQ2/IQ3
+figures below.*
+
+### IQ2_XXS vs IQ3_XXS, for a card too small for 4-bit
+
+Council meeting n = 5, planning meeting n = 3:
+
+| corpus | variant | map s | reduce s | terms (range) | words | facts |
+|---|---|---|---|---|---|---|
+| 34 min | IQ3_XXS | 53 | 151 | 31 (29–32) | 1127–1306 | 15/15 |
+| 34 min | IQ2_XXS | 44 | 103 | 32 (28–35) | 752–1156 | 12/15 |
+| **3h51m** | **IQ3_XXS** | 260 | 313 | **81 (68–89)** | 2521–3097 | 8/9 |
+| **3h51m** | **IQ2_XXS** | 215 | 212 | **58 (56–60)** | 1676–1892 | 6/9 |
+
+On a one-chunk meeting they are indistinguishable. **On a 4-hour meeting they separate
+cleanly and the ranges do not overlap** — IQ2's best run (60) is below IQ3's worst (68).
+
+The mechanism is omission, not error: IQ2 is slightly *more* term-dense (32.3 against 27.9
+per 1000 words) and writes **38% less document** (1795 against 2888 words). It covers less
+of the meeting. For minutes that is the failure that matters, because a decision left out
+cannot be noticed by the reader.
+
+**IQ2_XXS is not a substitute at the length this app is for.** It is fine under about an
+hour. IQ2_XXS also has no `nextn` tensors (64 blocks) and so can never take MTP.
+
+---
+
+## 9aa. High Quality is UD-IQ4_XS; MTP is conditional
+
+`Qwen3.8-27B-UD-Q4_K_M` (15.33 GiB) → `Qwen3.8-27B-UD-IQ4_XS` (13.27 GiB), key
+`q4_k_m` → `iq4_xs`. Both 4-bit, no quality difference that reproduces (§9z), and the
+smaller file is the only one that fits a 16 GB card whole — 3.4x on the short meeting,
+3.6x at 3h51m. Low Quality stays IQ3_XXS.
+
+`HIGH_MIN_VRAM_MB` stays **15000**. The smaller file would clear a lower bar, but the point
+was to make the same machines faster, not to widen who gets the large model. Lower it with
+measurements from a 12-14 GB card in hand.
+
+The old key disappearing is safe: `resolve_key` falls back to detection for any key it does
+not recognise, so a `config.json` pinned to `"q4_k_m"` gets the new default.
+
+**MTP only when nothing is being offloaded.** `llm.spec_type` defaults to `"auto"`;
+`LlamaServer.spec_type()` returns the model's `spec` field when the placement produced no
+`--override-tensor`, and nothing when it did. The draft context costs ~700 MiB (§9y), and
+buying that by pushing more FFN blocks onto the processor is a bad trade — the offload is
+the largest cost there is (§9w), and MTP is worth ~50% while a heavy offload costs several
+times that. `""` forces off, `"draft-mtp"` forces on.
+
+Moved with it: `hardware.MODELS` and `HIGH_MIN_VRAM_MB`; `llm.spec_type()`;
+`config.llm.spec_type` default; `calibration._LLM_RATES` and `DEFAULT_MODEL` (now 56 and 41
+s per audio-hour, measured on the 5060 Ti with the model resident, replacing a figure taken
+on a 10 GB card with 24 layers offloaded); `run.bat`; `DOWNLOAD_MODELS.bat` (URL checked,
+not assumed: `content-length: 14252845984`, byte-identical to the file measured); README;
+CLAUDE.md.
+
+**Changing the model would have bricked every install in the field.** The update payload
+carries no `models\` (§9q), so a copy updating from 1.0.x keeps Q4_K_M and never
+receives UD-IQ4_XS. Both startup gates named the new file specifically, so `run.bat`
+would have refused to start with *"These files are missing: Qwen3.8-27B-UD-IQ4_XS.gguf"*
+until the user re-ran a 14 GB download. Caught before publishing, not after.
+
+The fix is to require **at least one** language model rather than every one, in both
+`run.bat` and `config.missing_files()`, and to keep Q4_K_M selectable while it is on
+disk (`hardware.LEGACY_MODELS`). `choose_key` now picks among files that actually exist,
+ordered by `min_vram_mb` descending -- appending the legacy entry broke that ordering and
+offered Low Quality to a 16 GB card holding Q4_K_M, which `_by_preference` restores.
+
+The general rule this is an instance of: **a release may not require a file the updater
+cannot deliver.** Only `DOWNLOAD_MODELS.bat` ships models, and the update button does not
+run it.
+
+**A hardcoded key in the UI broke with the rename.** `app.js` read
+`d.recommended === "q4_k_m"` to choose between "High Quality" and "Low Quality" in the note
+under the dropdown, and silently told every machine that Low Quality was selected while
+High Quality ran. It now takes the tier from the model's own label.
+
+---
+
 ## 10. Still not measured
 
-- Tokens/second during real map calls on the target hardware.
 - Wall time by stage for a full 4-hour and 8-hour run including the LLM stages.
-- An 8-hour recording end to end. Everything above is measured at 3h25m; section 0 now
-  requires testing at 8 hours.
-- Final unzipped folder size is currently **~19 GB** (16.5 GB model, 1.8 GB binaries,
-  253 MB runtime). `tools\` adds 180 MB and should be deleted before shipping.
+- An 8-hour recording end to end. Everything is measured at 3h51m or less.
+- **Five runs of the 4-bit files on a long meeting.** §9z has n=5 on the 34-minute
+  meeting and n=1 on the 3h51m one. The case for UD_IQ4_XS does not depend on it --
+  it rests on a 3.4-3.6x speed advantage that reproduced at both lengths.
+- **What MTP is worth on Q4_K_M and Q4_K_S.** Every file except IQ2_XXS carries the
+  `blk.64.nextn.*` tensors; `llm.spec_type` turns it on without a code change. Q4_K_M has
+  the least VRAM headroom and is the one most likely not to fit with the draft context.
+- **IQ2_S (7.8 GiB)** as the middle option for an 8 GB card: ~16 FFN blocks offloaded
+  against IQ3_XXS's 35, where IQ2_XXS needs 4. Untested.
+- **The Port option against a server that is not llama.cpp.** §9u assumes llama-server:
+  `/tokenize` for chunking, `/props` for the context, `chat_template_kwargs` for thinking.
+  An OpenAI-compatible server without those needs a fallback that does not exist.
+- Final unzipped folder size is now **~17 GB** (14.3 GB model, 1.8 GB binaries, 253 MB
+  runtime). `tools\` adds 180 MB and should be deleted before shipping.

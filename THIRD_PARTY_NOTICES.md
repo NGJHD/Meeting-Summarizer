@@ -75,7 +75,7 @@ Marked **(shipped)** where the file is inside the `-full` zip rather than downlo
 | [Silero VAD v5.1.2](https://huggingface.co/ggml-org/whisper-vad) (ggml) **(shipped)** | Speech detection | MIT |
 | [pyannote segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0) (ONNX re-export) **(shipped)** | Speaker segmentation | MIT |
 | [NVIDIA TitaNet-Large](https://huggingface.co/nvidia/speakerverification_en_titanet_large) (ONNX re-export) **(shipped)** | Speaker embedding | **CC-BY-4.0** |
-| [Qwen3.8-27B](https://huggingface.co/unsloth/Qwen3.8-27B-GGUF) — Q4_K_M and IQ3_XXS | Summaries and minutes | Apache-2.0 |
+| [Qwen3.8-27B](https://huggingface.co/unsloth/Qwen3.8-27B-GGUF) — UD-IQ4_XS and IQ3_XXS | Summaries and minutes | Apache-2.0 |
 
 The ONNX re-exports of the two speaker models are distributed by the sherpa-onnx project.
 

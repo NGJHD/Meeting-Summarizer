@@ -9,7 +9,11 @@
     "threads": "auto",
     "port": 8080,
     "startup_timeout_s": 180,
-    "idle_timeout_s": 300
+    "idle_timeout_s": 300,
+    "external": {
+      "enabled": false,
+      "port": 9931
+    }
   },
   "chunking": {
     "target_tokens": 10000,

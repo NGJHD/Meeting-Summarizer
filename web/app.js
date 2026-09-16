@@ -173,21 +173,38 @@
       .then(function (r) { return r.json(); })
       .then(function (d) {
         var sel = $("model");
+        var ext = d.external || { enabled: false, port: 9931 };
         sel.textContent = "";
         (d.models || []).forEach(function (m) {
           var o = document.createElement("option");
           o.value = m.key;
           o.textContent = m.label + (m.available ? "" : "  (not downloaded)");
           o.disabled = !m.available;
-          if (m.key === d.recommended) o.selected = true;
           sel.appendChild(o);
         });
+        // The third entry is not a model we ship but a server the user is
+        // already running. Never disabled: there is no file to check for, and
+        // whether anything is listening is only knowable by trying.
+        var port = document.createElement("option");
+        port.value = "external";
+        port.textContent = "Port";
+        sel.appendChild(port);
+
+        sel.value = d.selected || d.recommended;
+        $("port").value = ext.port || 9931;
         state.recommended = d.recommended;
         var gb = d.vram_mb ? (d.vram_mb / 1024).toFixed(1) + " GB" : "unknown";
         var how = { cuda: "NVIDIA", vulkan: "Vulkan", cpu: "the processor" };
+        // Read the tier out of the model's own label rather than comparing
+        // against a hard-coded key: the High Quality key changed from
+        // "q4_k_m" to "iq4_xs" and this line silently began telling every
+        // machine that Low Quality was selected while High Quality ran.
+        var picked = (d.models || []).filter(function (m) {
+          return m.key === d.recommended;
+        })[0];
+        var tier = picked ? String(picked.label).split(":")[0].trim() : "a model";
         var note = "Detected " + (d.device || "a graphics card") + " with " + gb +
-                   " of video memory, so " +
-                   (d.recommended === "q4_k_m" ? "High Quality" : "Low Quality") +
+                   " of video memory, so " + tier +
                    " is selected. You can change it.";
         // Say so when transcription and the language model are not on the same
         // backend -- it is the difference between a 50-minute stage and a
@@ -197,10 +214,66 @@
           note += " Running the language model on " + (how[d.llm_backend] || d.llm_backend) +
                   " and transcription on " + (how[d.whisper_backend] || d.whisper_backend) + ".";
         }
-        $("model-note").textContent = note;
-        sel.addEventListener("change", showEstimate);
+        // Kept so switching away from Port and back restores what the
+        // detection actually found, rather than leaving the port explanation
+        // sitting under a High Quality selection.
+        state.modelNote = note;
+        syncPort();
+        sel.addEventListener("change", function () {
+          syncPort();
+          saveChoice();
+          showEstimate();
+        });
+        // Save on blur, not on every keystroke: typing "9931" would otherwise
+        // post four times, and "9" on its own is a port we would reject.
+        $("port").addEventListener("change", saveChoice);
+        $("port").addEventListener("blur", saveChoice);
       })
       .catch(function () { /* the dropdown just stays empty; config still applies */ });
+  }
+
+  // Show the port box only when it means something, and describe what the
+  // choice does -- "Port" on its own tells the user nothing about the fact
+  // that we will not be loading a model of our own.
+  function syncPort() {
+    var external = $("model").value === "external";
+    $("port-field").hidden = !external;
+    $("model-note").textContent = external
+      ? "Sending the work to a language model already running on this " +
+        "computer at 127.0.0.1, on the port above. Nothing of ours is " +
+        "loaded, so the quality and the speed are whatever that server " +
+        "gives. Start it before pressing Process."
+      : (state.modelNote || "");
+  }
+
+  // Remembered whether or not a recording is ever processed, so that setting
+  // up a port and then closing the window does not lose the setting. Failures
+  // are shown but not fatal: the choice still applies to this session.
+  var lastSaved = "";
+
+  function saveChoice() {
+    var body = { model: $("model").value, port: $("port").value };
+    // `change` and `blur` both fire for one edit of the port box, and the
+    // dropdown re-saves on every switch. Skip a post that would write what
+    // is already there.
+    var signature = body.model + ":" + body.port;
+    if (signature === lastSaved) return;
+    lastSaved = signature;
+    fetch("/api/models/choice", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    })
+      .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); })
+      .then(function (res) {
+        if (!res.ok) {
+          lastSaved = "";          // let the next attempt through
+          fail(res.body.error || "That choice couldn't be saved.");
+        } else {
+          $("setup-error").hidden = true;
+        }
+      })
+      .catch(function () { lastSaved = ""; });   // saving is a convenience
   }
 
   /* -------------------------------------------------------------- picking */

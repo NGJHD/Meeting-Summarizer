@@ -209,7 +209,7 @@ MeetingSummariser\
     ggml-silero-v5.1.2.bin
     segmentation-3.0.onnx
     speaker-embedding.onnx
-    Qwen3.8-27B-UD-Q4_K_M.gguf   <- High Quality, used at 15GB VRAM and above
+    Qwen3.8-27B-UD-IQ4_XS.gguf   <- High Quality, used at 15GB VRAM and above
     Qwen3.8-27B-UD-IQ3_XXS.gguf  <- Low Quality, used below that
   prompts\
     map.txt
@@ -270,7 +270,9 @@ operator edits this file in Notepad; the end user never sees it.
     "threads": "auto",
     "port": 8080,
     "startup_timeout_s": 180,
-    "idle_timeout_s": 300
+    "idle_timeout_s": 300,
+    "spec_type": "",
+    "external": { "enabled": false, "port": 9931 }
   },
   "chunking": {
     "target_tokens": 10000,
@@ -284,7 +286,8 @@ operator edits this file in Notepad; the end user never sees it.
     "map": false,
     "group_reduce": false,
     "reduce": true,
-    "reduce_effort": "medium"
+    "reduce_effort": "medium",
+    "reduce_budget_tokens": 4000
   },
   "pipeline": {
     "concurrent_diarization": true
@@ -334,7 +337,14 @@ Everything marked `"auto"` is **detected per machine, not guessed**, and an expl
 always wins: `llm.model` picks the quantisation this card can hold (§13.3),
 `llm.gpu_layers` and `llm.cpu_ffn_regex` decide where the weights live (§11.1),
 `llm.threads` omits the flag so llama.cpp uses the physical core count, and `gpu.backend`
-chooses CUDA, Vulkan or CPU per engine (§2.1). The measurements behind each are in
+chooses CUDA, Vulkan or CPU per engine (§2.1).
+
+`llm.external` is the one block the UI writes to (§13.3): the Model dropdown sets it
+when `Port` is chosen and clears it otherwise, and touches nothing else in this file.
+`llm.spec_type` is speculative decoding — `""` omits the flag, `"draft-mtp"` uses the
+multi-token-prediction layer carried inside the GGUF itself.
+`thinking.reduce_budget_tokens` caps reasoning so it cannot eat the whole of
+`max_tokens` and leave no document behind (§11.2). The measurements behind each are in
 `BUILD_NOTES.md`.
 
 ---
@@ -597,6 +607,12 @@ Before every LLM call, assert that the assembled prompt fits within
 `ctx_size - max_output_tokens - 2000`. If it does not, log the overflow and split further
 rather than sending it.
 
+**`ctx_size` is the running server's, not ours.** With the Port option (§13.3) the server
+was started by somebody else and may be smaller — the operator's own launcher uses
+`-c 16384`, half our default. It is read from `/props` at attach; the chunker sizes
+`target_tokens` to it too, so a chunk built for 32k is not refused by a guard measuring
+16k. A guard measuring the wrong number does not guard.
+
 ---
 
 ## 11. STAGE 6 — THE LLM
@@ -610,7 +626,7 @@ Launch:
 
 ```
 bin\llama-cuda\llama-server.exe ^
-  -m models\Qwen3.8-27B-UD-Q4_K_M.gguf ^
+  -m models\Qwen3.8-27B-UD-IQ4_XS.gguf ^
   --ctx-size 32768 ^
   --flash-attn on ^
   --cache-type-k q8_0 --cache-type-v q8_0 ^
@@ -627,11 +643,19 @@ runtime — see below and §2.1. The regex shown is what a 10 GB card computes; 
 card it is one block, and on unified memory the last line becomes `--n-gpu-layers 0` with
 no regex at all and the CPU binary is used instead.
 
-**Why `--override-tensor`:** a 27B model at Q4_K_M does not fit in 16GB. This pushes the
-FFN tensors of the upper layers into system RAM while keeping attention on the GPU. It is
-preferred over dropping to a 3-bit quant because summaries live or die on getting names,
-figures and dates exactly right, and sub-4-bit quants are where models begin mangling
-proper nouns and digits.
+**Why `--override-tensor`:** where the weights do not fit, this pushes the FFN tensors of
+the upper layers into system RAM while keeping attention on the GPU. It is preferred over
+dropping to a 3-bit quant because summaries live or die on getting names, figures and
+dates exactly right, and sub-4-bit quants are where models begin mangling proper nouns
+and digits.
+
+**High Quality is `UD-IQ4_XS`, not `Q4_K_M`.** Both are 4-bit; the former is 13.27 GiB
+against 15.33 and therefore the only one that fits a 16GB card whole, which is worth
+**3.4–3.6x** on the LLM stage. Five runs each found no quality difference between them on
+any measure that reproduces (`BUILD_NOTES.md` §9z). So on a 16GB card the offload above is
+now the *exception* rather than the rule, and `--spec-type draft-mtp` is passed instead —
+the model's own multi-token-prediction layer, worth roughly another 50%, which costs
+~700 MiB of VRAM and is therefore enabled only when nothing is being offloaded.
 
 **Both are computed per machine, not hard-coded, and are skipped on unified
 memory.** The regex above was written for one 16 GB card and is wrong on every
@@ -641,6 +665,13 @@ other. `hardware.placement()` decides:
 |---|---|---|
 | Dedicated GPU | `99` | FFN blocks that do not fit, computed from measured VRAM |
 | Unified memory | `0` | none |
+
+The arithmetic is in **GiB on both sides**, from the file's real size on disk rather
+than a figure in a table. It used to compare decimal GB against GiB, which overstated
+every model by 7% and offloaded blocks that would have fitted: on a 16 GB card Q4_K_M
+was pushed to twelve blocks where six is enough, costing 40% of its generation speed for
+nothing (`BUILD_NOTES.md` §9w). Since the offload *is* the cost of the large model, the
+unit has to be right.
 
 Keeping the FFN split on a dedicated card is measured, not assumed. On a 10 GB
 card with the 10.9 GB model, at identical VRAM occupancy:
@@ -712,10 +743,15 @@ default**. Left alone it will burn thousands of reasoning tokens on every map ca
   "min_p": 0.0,
   "presence_penalty": 0.0,
   "repeat_penalty": 1.0,
-  "max_tokens": 8000,
+  "max_tokens": 12000,
   "chat_template_kwargs": { "enable_thinking": true, "reasoning_effort": "medium" }
 }
 ```
+
+**`max_tokens` is 12000, not the 8000 this section first specified.** Thinking and the
+document share it. Measured at 3h51m: ~3440 thinking + a 4158-token document = 7598, i.e.
+95% of 8000. At five hours 8000 binds and the *document* is what gets truncated
+(`BUILD_NOTES.md` §9x).
 
 The split is deliberate. Map and group-reduce are mechanical consolidation — reasoning
 buys little and costs a great deal across many calls. The final reduce does cross-section
@@ -723,11 +759,29 @@ inference (resolving a speaker mentioned late against a name introduced early,
 recognising that two differently-transcribed phrases refer to one thing), which is where
 thinking earns its cost. All three are switchable via `config.json.thinking`.
 
-**Note on `--reasoning-budget`:** setting it at server level may disable thinking
-globally, which would break the final reduce. It is deliberately omitted from the launch
-command above in favour of per-request control. **Verify which mechanism the shipped
-build actually honours** — send one request with `enable_thinking: false` and confirm no
-`<think>` block comes back — and record the finding in `BUILD_NOTES.md`.
+**Note on `--reasoning-budget`:** this section originally omitted the flag, on the grounds
+that it might disable thinking globally and that per-request control governed. Both were
+measured and both are wrong (`BUILD_NOTES.md` §9t). The flag **is set**:
+
+```
+--reasoning-budget 4000 --reasoning-budget-message "<stop reasoning, write the document>"
+```
+
+- It does **not** disable thinking globally. With the budget set, `enable_thinking: false`
+  still returns zero reasoning tokens and `enable_thinking: true` still thinks — the
+  budget only caps how long.
+- There is **no per-request equivalent**. `reasoning_control` exists in the request schema
+  and is silently ignored; `enable_thinking` and `reasoning_effort` are per-request, the
+  budget is not.
+
+It exists because thinking and the answer share `max_tokens`: without it the reduce can
+spend the whole allowance reasoning and return `finish_reason: length` with **empty
+content**, which the retry logic repeats twice and then fails the job on.
+`thinking.reduce_budget_tokens` sets the cap.
+
+We cannot set launch flags on a server we did not start (§13.3, Port), so the retry also
+degrades: an empty completion with `finish_reason: length` is retried **with thinking
+off** rather than repeated identically.
 
 **Always strip `<think>...</think>` blocks from responses before use, even when thinking
 is disabled.** Belt and braces.
@@ -854,24 +908,43 @@ Single page, no framework, no bundler, no CDN references. Everything served loca
    everything up to the final reduce is identical for the two modes, so it
    runs the same consolidated notes through a second final reduce and writes
    two files. One extra call. Its value is still `both` on the wire.
-3. Model dropdown — `High Quality: Qwen3.8-27B-UD-Q4_K_M` /
-   `Low Quality: Qwen3.8-27B-UD-IQ3_XXS`, with a tooltip saying Low Quality suits
+3. Model dropdown — `High Quality: Qwen3.8-27B-UD-IQ4_XS` /
+   `Low Quality: Qwen3.8-27B-UD-IQ3_XXS` / `Port`, with a tooltip saying Low Quality suits
    machines with about 8GB of video memory and High Quality about 16GB or more.
 
    The default is **detected**, not configured: VRAM is read at startup and
-   Q4_K_M chosen at 15GB or above (15, not 16 — cards sold as 16GB report as
+   IQ4_XS chosen at 15GB or above (15, not 16 — cards sold as 16GB report as
    little as 15.8GB once the driver has taken its share). The user can override
    the default; detection picks it, it does not overrule anyone. The time
    estimate updates with the choice, since the two differ by roughly 2x.
 
    Both models ship. `llm.model` and `llm.cpu_ffn_regex` default to `"auto"`;
    an explicit value in `config.json` still wins.
+
+   **`Port` is the third entry**, added at the operator's request. It reveals a port box
+   (default **9931**) and sends every LLM call to `127.0.0.1:<port>` instead of launching
+   anything of ours — no weights loaded, no VRAM taken, no process to kill. Only the LLM
+   stages go there; ffmpeg, whisper, diarization and merge stay local. Not a settings
+   screen and no breach of §16: like the participant count, it is a fact about the user's
+   setup we cannot discover.
+
+   That server is **not ours to manage**. Never killed on cancel or finish; its model,
+   placement, context and launch flags are not our choice — hence the thinking-off retry
+   in §11.2 and the `/props` context read in §10.3. Attach fails after 10 s, not
+   `startup_timeout_s`: it is either up or it is not.
+
+   **The choice is remembered, and only this one.** It writes `llm.external.enabled` and
+   `llm.external.port` on change, not on Process, so setting up a port and closing the
+   window does not lose it. High or Low clears the flag and the next launch re-detects —
+   detection beats a choice made once on a machine whose card may since have changed. The
+   port number survives either way. Nothing else in `config.json` is touched by the UI.
+
 4. Participant count — optional numeric input, *"How many people spoke? (optional —
    leave blank if unsure)"*. Blank means auto-cluster then prune (§8.1); a number is
    passed straight to the clusterer and distance thresholding is skipped, which is much
    the most reliable path on a long recording.
 
-   This is the **only** UI control beyond the two above. §16's ban on settings screens
+   This is the **only** UI control beyond the three above. §16's ban on settings screens
    covers inference parameters; it does not cover metadata about the recording, and
    "how many people were in this meeting" is something the user knows and the clusterer
    cannot reliably work out.

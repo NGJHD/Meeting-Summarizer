@@ -153,7 +153,7 @@ def generate_one(job: Job, cfg: dict, mode: str, data: dict) -> None:
     names = data.get("names") or {}
     server = None
     try:
-        job.set_stage("reduce", "Loading language model (up to 2 minutes on first run)")
+        job.set_stage("reduce", llm.loading_message(cfg, job))
         # One call, declared now so the ETA is populated during the model load
         # rather than appearing out of nowhere when generation starts.
         job.pending_calls = {"reduce": 1}
@@ -204,7 +204,7 @@ def _produce_document(job: Job, cfg: dict, turns, attributed: bool, meeting_name
     """
     if not turns:
         return []
-    job.set_stage("map", "Loading language model (up to 2 minutes on first run)")
+    job.set_stage("map", llm.loading_message(cfg, job))
     server = None
     try:
         server = llm.LlamaServer(job, cfg)

@@ -27,6 +27,16 @@ CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 LLM_FAILED = "The language model could not be started."
 LLM_CALL_FAILED = "The language model stopped responding."
+EXTERNAL_FAILED = (
+    "Nothing answered on the port you chose. Start the language model server "
+    "first, or pick High Quality or Low Quality instead."
+)
+
+# The Model dropdown's third entry: not a quantisation but "somebody else's
+# server". Kept out of hardware.MODELS deliberately -- it is not a file we
+# ship, size, or place on a GPU, and every one of those code paths has to
+# skip it rather than special-case it.
+EXTERNAL = "external"
 
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 _OPEN_THINK_RE = re.compile(r"^.*?</think>", re.DOTALL)
@@ -35,6 +45,19 @@ _OPEN_THINK_RE = re.compile(r"^.*?</think>", re.DOTALL)
 # effort outside this set, and silently rewrites "high" to "xhigh"
 # (BUILD_NOTES.md section 5). Validate before dispatch rather than after.
 VALID_EFFORT = {"xhigh", "medium", "low"}
+
+# How long to wait for a server we did not start. See LlamaServer.attach.
+ATTACH_TIMEOUT_S = 10.0
+
+# Passed to --reasoning-budget-message. It is injected in place of the rest of
+# the thinking when the budget runs out, so the model stops reasoning and
+# starts writing rather than simply being cut off mid-thought. Phrased as an
+# instruction because that is what it becomes: it lands inside the reasoning
+# block, immediately before the closing tag.
+BUDGET_MESSAGE = (
+    "\n\nThat is enough planning. Write the finished document now, in full, "
+    "using the structure asked for.\n"
+)
 
 
 def strip_thinking(text: str) -> str:
@@ -69,6 +92,42 @@ def load_prompt(name: str) -> str:
     return text
 
 
+def _ctx_from_props(props: dict) -> int:
+    """The context size a running llama-server reports. 0 if it will not say.
+
+    llama.cpp has moved this around between builds, so try the places it has
+    lived rather than trusting one. Returning 0 is safe: the caller then falls
+    back to our configured value, which is what the code did before.
+    """
+    gen = props.get("default_generation_settings")
+    for candidate in (gen, (gen or {}).get("params"), props):
+        if isinstance(candidate, dict):
+            for key in ("n_ctx", "ctx_size"):
+                try:
+                    value = int(candidate.get(key) or 0)
+                except (TypeError, ValueError):
+                    continue
+                if value > 0:
+                    return value
+    return 0
+
+
+def loading_message(cfg: dict, job: Job) -> str:
+    """What the progress panel says while the LLM stage is getting ready.
+
+    "up to 2 minutes on first run" is about loading 16 GB of weights off a cold
+    disk, and it is a promise we cannot keep about a server we did not start --
+    that one either answers at once or is not there. Saying the wrong one is
+    worse than saying nothing: the user waits out two minutes that were never
+    going to happen.
+    """
+    saved, port = config.external_llm(cfg)
+    external = (job.model_key == EXTERNAL) or (not job.model_key and saved)
+    if external:
+        return "Connecting to the language model on port %d" % port
+    return "Loading language model (up to 2 minutes on first run)"
+
+
 def fill(template: str, **values: str) -> str:
     for key, value in values.items():
         template = template.replace("{{%s}}" % key.upper(), str(value))
@@ -82,8 +141,20 @@ class LlamaServer:
         self.job = job
         self.cfg = cfg
         self.llm = cfg["llm"]
-        self.port = int(self.llm.get("port", 8080))
+        # "Port" in the Model dropdown means a llama-server somebody else is
+        # already running. The job's choice wins over config.json, so a user
+        # who switches back to High or Low gets our own server for that run
+        # even before the saved preference has been re-read.
+        saved, saved_port = config.external_llm(cfg)
+        if self.job.model_key == EXTERNAL:
+            self.external = True
+        elif self.job.model_key:
+            self.external = False
+        else:
+            self.external = saved            # rebuilds, and tools with no UI
+        self.port = saved_port if self.external else int(self.llm.get("port", 8080))
         self.proc: Optional[subprocess.Popen] = None
+        self._remote_ctx = 0
         self._conn: Optional[HTTPConnection] = None
         self._conn_lock = threading.Lock()
         self._resolved = None
@@ -106,10 +177,26 @@ class LlamaServer:
         if getattr(self, "_resolved", None) is not None:
             return self._resolved
 
+        if self.external:
+            # There are no weights of ours to find and nothing to place on a
+            # GPU: the server on that port was started by somebody else, with
+            # whatever model and offload they chose.
+            self.job.model_key = EXTERNAL
+            self._resolved = (Path(), "", "")
+            return self._resolved
+
         layers = str(self.llm.get("gpu_layers", "auto"))
         regex = str(self.llm.get("cpu_ffn_regex") or "")
 
-        requested = self.job.model_key or self.llm.get("model") or "auto"
+        requested = self.job.model_key or ""
+        if requested and requested not in hardware.BY_KEY:
+            # job.model_key is the dropdown's vocabulary, not a filename. A
+            # value that is not one of its keys is a label -- tools/ sets one
+            # so a comparison run's timings are filed apart from real jobs --
+            # and must not be resolved as a path to a model that will not be
+            # found. Fall back to what config.json asked for.
+            requested = ""
+        requested = requested or self.llm.get("model") or "auto"
         if requested not in hardware.BY_KEY and requested not in ("auto", ""):
             # An explicit path in config.json still wins.
             self._resolved = (config.resolve(requested),
@@ -182,9 +269,72 @@ class LlamaServer:
             # into system RAM. Measured 2.4x faster than letting llama.cpp fit
             # whole layers, at identical VRAM -- see hardware.placement.
             cmd += ["--override-tensor", regex]
+        spec = self.spec_type(regex)
+        if spec:
+            cmd += ["--spec-type", spec]
+        budget = self._reasoning_budget()
+        if budget > 0:
+            cmd += ["--reasoning-budget", str(budget)]
+            cmd += ["--reasoning-budget-message", BUDGET_MESSAGE]
         return cmd
 
+    def spec_type(self, regex: str) -> str:
+        """Speculative decoding for this model on this card. "" = off.
+
+        "draft-mtp" uses the multi-token-prediction layer carried inside the
+        GGUF itself (blk.64.nextn.*), so there is no second model to ship. It
+        is lossless -- draft-and-verify, so the accepted tokens are the ones
+        the target model would have produced -- and measured worth roughly 50%
+        on generation (BUILD_NOTES 9v, 9y).
+
+        **It is not free in VRAM.** The draft context costs about 700 MiB: its
+        own KV cache and compute buffers, plus a larger recurrent-state
+        allocation. So `"auto"` enables it only when the model already fits
+        without an FFN offload. Spending 700 MiB on a faster draft while
+        pushing more layers onto the processor to pay for it would be a poor
+        trade -- the offload is the single largest cost there is on this
+        pipeline (9w).
+
+        `llm.spec_type` overrides: "" forces it off, "draft-mtp" forces it on
+        regardless of fit. Files without the tensors get nothing either way --
+        IQ2_XXS has 64 blocks and no nextn at all.
+        """
+        from . import hardware
+
+        requested = str(self.llm.get("spec_type", "auto"))
+        if requested != "auto":
+            return requested
+        if regex:
+            return ""                     # already offloading; do not add to it
+        key = self.job.model_key
+        return str(hardware.BY_KEY.get(key, {}).get("spec") or "")
+
+    def _reasoning_budget(self) -> int:
+        """Ceiling on thinking tokens for the final reduce. 0 = unrestricted.
+
+        The failure this prevents is specific and expensive: thinking and the
+        answer come out of one allowance (reduce.REDUCE_MAX_TOKENS), and a
+        model that reasons for the whole of it returns `finish_reason: length`
+        with an *empty* `content`. llm.chat() sees an empty completion, retries
+        twice, and fails the job -- after the recording has already been
+        transcribed, diarized and mapped.
+
+        Measured on a real 3h51m recording: the reduce wanted ~3440 thinking
+        tokens and then wrote a 4158-token document, so 4000 leaves the
+        document the larger half of the allowance (BUILD_NOTES 9x).
+        """
+        think = self.cfg["thinking"]
+        if not any(bool(think.get(k)) for k in ("map", "group_reduce", "reduce")):
+            return 0                      # nothing thinks; nothing to cap
+        try:
+            return max(0, int(think.get("reduce_budget_tokens") or 0))
+        except (TypeError, ValueError):
+            return 0
+
     def start(self) -> None:
+        if self.external:
+            self.attach()
+            return
         model, _layers, _regex = self.resolve_model()
         if not model.exists():
             raise JobError(LLM_FAILED, "model file missing: %s" % model)
@@ -222,6 +372,89 @@ class LlamaServer:
             "llama-server did not become ready within %.0fs\n%s" % (timeout, self._log_tail()),
         )
 
+    def attach(self) -> None:
+        """Use a llama-server already running on this port instead of our own.
+
+        The wait is short on purpose. Our own server has a model to load off a
+        cold disk, which is why `startup_timeout_s` is 180; a server somebody
+        started by hand is either up or it is not, and making the user watch a
+        three-minute countdown for a port with nothing behind it is the wrong
+        way to tell them they mistyped it. If it happens to be loading, the
+        health check fails closed and they can start the job again.
+        """
+        self.resolve_model()
+        deadline = time.time() + ATTACH_TIMEOUT_S
+        while time.time() < deadline:
+            self.job.check_cancelled()
+            if self._healthy():
+                props = self._props()
+                self._remote_ctx = _ctx_from_props(props)
+                name = str(props.get("model_path")
+                           or props.get("model_alias") or "")
+                self.job.log("llm: using the server on port %d (%s, %s context)"
+                             % (self.port, Path(name).name or "model unknown",
+                                "%d" % self._remote_ctx if self._remote_ctx
+                                else "unknown"))
+                if self._remote_ctx and self._remote_ctx < int(
+                        self.llm.get("ctx_size", 32768)):
+                    # Not a failure -- the reduce simply splits into more
+                    # tiers -- but it is why a job through this port may take
+                    # more calls than the same recording through our own.
+                    self.job.log(
+                        "llm: that is smaller than our own %d, so long "
+                        "meetings will be consolidated in more steps"
+                        % int(self.llm.get("ctx_size", 32768)))
+                # Our own runs keep whisper and the LLM out of VRAM at the same
+                # time (section 11.1). We cannot do that for a server we did
+                # not start, so say so rather than let a mysterious slowdown or
+                # an out-of-memory during transcription go unexplained.
+                self.job.log("llm: that server holds its own memory for the "
+                             "whole job, including while transcribing")
+                return
+            time.sleep(0.5)
+        raise JobError(
+            EXTERNAL_FAILED,
+            "nothing healthy on 127.0.0.1:%d after %.0fs" % (self.port, ATTACH_TIMEOUT_S),
+        )
+
+    @property
+    def ctx_size(self) -> int:
+        """The context window actually in force, which may not be ours.
+
+        For our own server this is `llm.ctx_size`, because we passed it on the
+        command line. For a server on a port it is whatever that one was
+        started with, and assuming ours would be a silent correctness bug: the
+        overflow guard in reduce.py exists to force another group-reduce tier
+        rather than send a prompt that will not fit, and a guard measuring
+        against the wrong number does not guard. The operator's own launcher
+        uses `-c 16384`, half of our default, so this is not hypothetical.
+        """
+        if self.external and self._remote_ctx:
+            return self._remote_ctx
+        return int(self.llm.get("ctx_size", 32768))
+
+    def _props(self) -> dict:
+        try:
+            conn = HTTPConnection("127.0.0.1", self.port, timeout=5)
+            conn.request("GET", "/props")
+            resp = conn.getresponse()
+            data = json.loads(resp.read())
+            conn.close()
+            return data if isinstance(data, dict) else {}
+        except Exception:  # noqa: BLE001 - a server that answers /health but
+            return {}                      # not /props is still usable
+
+    def _remote_model(self) -> str:
+        """What the external server is actually serving, for the log.
+
+        Worth a line in the log because nothing else in the job records it: the
+        user chose a port, not a model, and six months later the only way to
+        know what wrote a document is if we wrote it down.
+        """
+        data = self._props()
+        name = str(data.get("model_path") or data.get("model_alias") or "")
+        return Path(name).name or "model unknown"
+
     def _log_tail(self, lines: int = 40) -> str:
         try:
             with open(config.TEMP / "llama-server.log", "r", encoding="utf-8", errors="replace") as fh:
@@ -243,6 +476,12 @@ class LlamaServer:
     def stop(self) -> None:
         """Shut the server down. 14GB of VRAM must not stay allocated."""
         self.abort()
+        if self.external:
+            # Somebody else's process. Dropping the in-flight request is the
+            # whole of our responsibility here; killing it would take down a
+            # server that was running before this job started and will be
+            # wanted after it.
+            return
         proc, self.proc = self.proc, None
         if proc is None:
             return
@@ -320,14 +559,14 @@ class LlamaServer:
         data = self._post("/tokenize", {"content": text}, timeout=300)
         return len(data.get("tokens", []))
 
-    def _stream(self, payload: dict, idle_timeout: float, on_token) -> tuple[str, str, int]:
-        """POST a streaming completion, returning (content, reasoning, tokens).
+    def _stream(self, payload: dict, idle_timeout: float, on_token) -> tuple[str, str, int, str]:
+        """POST a streaming completion, returning (content, reasoning, tokens, finish).
 
         Streaming is not for show. A non-streaming call needs a single total
         timeout covering the whole generation, and there is no good value for
-        it: the final reduce can legitimately emit 8000 tokens, which at the
-        1.8 tok/s this hardware manages is over an hour, while a genuinely hung
-        server should be caught in minutes. Streaming replaces that guess with
+        it: the final reduce can legitimately emit many thousands of tokens,
+        which at the 1.8 tok/s slow hardware manages is over an hour, while a
+        genuinely hung server should be caught in minutes. Streaming replaces that guess with
         an *idle* timeout -- the socket read only blocks between tokens -- so a
         slow call runs as long as it needs and a dead one is caught quickly.
         """
@@ -340,6 +579,7 @@ class LlamaServer:
         reasoning_chars = 0
         reasoning_tokens = 0
         tokens = 0
+        finish = ""
         try:
             conn.request(
                 "POST", "/v1/chat/completions", body=body,
@@ -366,6 +606,14 @@ class LlamaServer:
                 except ValueError:
                     continue
                 choices = event.get("choices") or [{}]
+                # Why the completion ended, not just that it did. "length"
+                # with nothing in `content` is the specific, expensive failure
+                # this whole budget mechanism exists to catch: the model spent
+                # its entire allowance thinking. It has to be distinguishable
+                # from a server that simply died, because the answer to one is
+                # to ask again differently and the answer to the other is not
+                # to ask again at all.
+                finish = choices[0].get("finish_reason") or finish
                 delta = choices[0].get("delta") or {}
                 piece = delta.get("content") or ""
                 if piece:
@@ -390,7 +638,7 @@ class LlamaServer:
             except Exception:  # noqa: BLE001
                 pass
 
-        return "".join(content), str(reasoning_chars), tokens
+        return "".join(content), str(reasoning_chars), tokens, finish
 
     def chat(
         self,
@@ -426,6 +674,13 @@ class LlamaServer:
             "chat_template_kwargs": kwargs,
             **sampling,
         }
+        # No per-request budget field. `reasoning_control` exists in this
+        # build's request schema and is silently ignored: measured against a
+        # server launched with --reasoning-budget 60, requests asking for
+        # 2000 came back capped at 60 all the same (BUILD_NOTES section 9s).
+        # The launch flag in command() is the whole mechanism, which means an
+        # external server is capped only if whoever started it said so -- and
+        # that is what the empty-completion retry below is for.
         idle = float(timeout or self.llm.get("idle_timeout_s", 300))
 
         last = ""
@@ -447,9 +702,10 @@ class LlamaServer:
             #   tokens   -- against how many tokens a call of this kind has
             #               actually produced on this machine before. Against
             #               `max_tokens` instead this is useless: the cap is
-            #               8000 and a document is 2300, so the bar crawls to a
-            #               third and leaps. The measured figure tracks the real
-            #               completion closely and reaches the end with it.
+            #               12000 and a document is 2300-4200, so the bar
+            #               crawls to a third and leaps. The measured figure
+            #               tracks the real completion and reaches the end
+            #               with it.
             #   elapsed  -- against how long such a call actually takes here.
             #               Approached asymptotically, 1 - e^-t: 63% at the
             #               expected time, 86% at twice it, never quite 100%.
@@ -483,7 +739,7 @@ class LlamaServer:
                     )
 
             try:
-                text, reasoning_chars, tokens = self._stream(payload, idle, on_token)
+                text, reasoning_chars, tokens, finish = self._stream(payload, idle, on_token)
                 elapsed = time.time() - started
                 self.job.log(
                     "llm: %d completion tokens in %.0fs (%.1f tok/s), %s reasoning chars"
@@ -499,7 +755,22 @@ class LlamaServer:
                 text = strip_thinking(text)
                 if text:
                     return text
-                last = "empty completion"
+                last = "empty completion (finish_reason=%s)" % (finish or "unknown")
+                if finish == "length" and payload["chat_template_kwargs"].get(
+                        "enable_thinking"):
+                    # The model reasoned for the whole of max_tokens and never
+                    # started the document. Asking again identically just buys
+                    # the same wait and the same nothing -- measured at 400
+                    # tokens: 1700 characters of reasoning, zero of content,
+                    # three times over. So change the question instead: drop
+                    # thinking for the retry and take a document written
+                    # without it over no document at all after an hour of
+                    # transcription, diarization and mapping.
+                    self.job.log("llm: the model used its whole allowance "
+                                 "thinking; retrying without thinking")
+                    payload["chat_template_kwargs"] = {"enable_thinking": False}
+                    payload.update({"temperature": 0.7, "top_p": 0.8,
+                                    "presence_penalty": 1.5, "min_p": 0.0})
             except Cancelled:
                 self.job.current_call = None
                 raise

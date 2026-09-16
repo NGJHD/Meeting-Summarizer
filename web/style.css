@@ -247,6 +247,14 @@ input[type="number"]:focus { outline: 2px solid var(--accent); outline-offset: -
 .tip:hover::after, .tip:focus::after { opacity: 1; visibility: visible; }
 #model { min-width: 300px; }
 .model-note { margin: 10px 0 0; color: var(--ink-soft); font-size: 13px; }
+/* The model names are long, so the select sizes itself to the longest of them
+   and leaves no room for the port box beside it on a narrow window. Capped
+   here rather than by truncating the labels: "High Quality" and "Low Quality"
+   lead each one, which is the part that has to stay readable. */
+.model-select { max-width: 20ch; }
+/* Wide enough for five digits *and* the number spinner Chrome draws inside
+   the field: at 8ch the arrows clipped "9931" to "993". */
+#port { width: 11ch; }
 
 /* ---- history ---- */
 

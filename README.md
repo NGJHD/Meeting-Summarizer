@@ -21,7 +21,7 @@ tagged with the speaker names.
 The full zip carries the app, the Python runtime and every inference binary, so step 2
 only has to fetch the models. It needs internet access; nothing after it does.
 
-After that, you can just copy the entire folder (about 30GB with the models) to other machines and it should work.
+After that, you can just copy the entire folder (about 28GB with the models) to other machines and it should work.
 
 Then, double-click `run.bat` and the UI will open ready for you to load your meeting's MP3 recording.
 
@@ -58,13 +58,28 @@ Three decisions shape everything else:
 
 Windows 11, at least 32GB RAM if there is no GPU
 
-If more than 16GB VRAM is detected, the app will auto select Qwen3.8-27B-UD-Q4_K_M model.
+If 15GB or more of VRAM is detected, the app auto-selects Qwen3.8-27B-UD-IQ4_XS.
 Otherwise it would be the Qwen3.8-27B-UD-IQ3_XXS.gguf.
 
 If no discrete GPU is detected, CPU will be used instead of the iGPU.
 
 All of this is detected at startup; there is nothing to configure. `bin\` carries one
 folder per backend and the right pair is chosen per engine.
+
+### Using a language model you already run
+
+The Model dropdown has a third entry, **Port**. Choose it and a port box appears; the
+app then sends every language-model call to a llama-server already running on this
+machine at `127.0.0.1` on that port, and loads nothing of its own. The default is 9931,
+which is the port llama-server is moving its own default to.
+
+That server stays yours. The app never starts it, never stops it, and never kills it on
+cancel — so start it before pressing Process, and expect it to hold its video memory for
+the whole job, including while the recording is being transcribed.
+
+The choice is remembered. It is also the only way to run this app without the two
+language models, which are 25 GB of the download: with Port selected, `run.bat` stops
+asking for them.
 
 ## Layout
 
@@ -75,7 +90,7 @@ folder per backend and the right pair is chosen per engine.
 | `prompts/` | The map / group-reduce / reduce prompts, as plain text |
 | `config.json` | Every tunable. There is deliberately no settings screen |
 | `run.bat` | Preflight checks, port selection, starts the server, opens the browser |
-| `DOWNLOAD_MODELS.bat` | Fetches ~30 GB of models and every per-backend binary. Resumable, size-verified, safe to re-run |
+| `DOWNLOAD_MODELS.bat` | Fetches ~28 GB of models and every per-backend binary. Resumable, size-verified, safe to re-run |
 
 `bin/`, `models/` and `runtime/` are not in the repository — they are the shipped payload,
 fetched by `DOWNLOAD_MODELS.bat` or copied with the release.

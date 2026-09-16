@@ -35,6 +35,17 @@ class Chunk:
         return hms(self.end_s)
 
 
+# Room to leave for the map prompt itself -- the instructions, the shared
+# rules and the chunk header that wrap every chunk. Measured at a little
+# over 600 tokens; rounded up because being wrong here costs a refused call.
+PROMPT_ALLOWANCE = 1000
+
+# Below this a chunk is too small to summarise usefully, and the job is
+# better off failing with the guard's plain message than producing dozens of
+# fragments. A context this small cannot run this pipeline.
+MIN_TARGET_TOKENS = 1500
+
+
 def render_turn(turn: SpeakerTurn, attributed: bool) -> str:
     stamp = "(%s)" % hms(turn.start)
     if attributed and turn.speaker >= 0:
@@ -78,6 +89,20 @@ def build_chunks(
     ccfg = cfg["chunking"]
     target = int(ccfg.get("target_tokens", 10000))
     overlap = int(ccfg.get("overlap_tokens", 400))
+
+    # `target_tokens` is written for our own 32k context. With the Port
+    # option the context belongs to a server we did not start and may be
+    # smaller -- the operator's own launcher uses 16384 -- and a chunk sized
+    # for 32k would then be refused by the guard in reduce.py with a message
+    # about the recording being too long, which is not what went wrong.
+    # Size the chunk to the window that actually exists instead.
+    max_out = int(ccfg.get("max_map_output_tokens", 1500))
+    room = server.ctx_size - max_out - 2000 - PROMPT_ALLOWANCE
+    if room < target:
+        job.log("chunker: %d-token context, so chunking at %d rather than %d"
+                % (server.ctx_size, max(room, MIN_TARGET_TOKENS), target))
+        target = max(room, MIN_TARGET_TOKENS)
+        overlap = min(overlap, max(target // 8, 1))
 
     lines = [render_turn(t, attributed) for t in turns]
     counts = _batched_counts(job, server, lines)

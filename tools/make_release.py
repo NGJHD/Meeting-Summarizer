@@ -37,7 +37,7 @@ PREFIX = "Meeting-Summariser"
 BUNDLED_DIRS = ("runtime", "bin")
 
 # The models small enough to travel, named individually -- `models\` as a whole
-# is 27 GB. Together these are 103 MB and they carry their weight twice over:
+# is 25 GB. Together these are 103 MB and they carry their weight twice over:
 # they are also the only two downloads that were never pinned to immutable
 # bytes (sherpa-onnx publishes them on floating release tags), and the
 # segmentation one arrives as a tar.bz2 that has to be unpacked and renamed.

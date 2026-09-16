@@ -35,10 +35,16 @@ MAX_RECORDS = 10
 # quantisation and by how much of the model fits on the card, so they are held
 # per model; everything before them is the same either way.
 #
-# Q4_K_M measured on a 3h25m recording (RTX 3080 10GB, 24 layers offloaded);
-# IQ3_XXS scaled from the 34-minute comparison in BUILD_NOTES §9h, where it ran
-# 1.8x faster on map and 2.2x on reduce. Both are cold-start guesses only --
-# they are replaced by observation after the first run on a machine.
+# IQ4_XS measured on the 3h51m planning meeting (RTX 5060 Ti 16GB, fits whole,
+# MTP on): 216 s of map and 159 s of reduce for 3.85 audio-hours, so 56 and 41
+# seconds per audio-hour. IQ3_XXS is scaled from the 34-minute comparison in
+# BUILD_NOTES §9h.
+#
+# Both are cold-start guesses only. Before any run completes, `rates()` reports
+# measured=False and the UI says so rather than printing a number; these values
+# only shape the progress bar's stage weights until the first real measurement
+# replaces them. A card slower than the one above will be under-estimated for
+# exactly one run.
 _SHARED_RATES = {
     "convert": 3.0,
     "transcribe": 104.0,      # transcription and diarization, run concurrently
@@ -47,11 +53,11 @@ _SHARED_RATES = {
 }
 
 _LLM_RATES = {
-    "q4_k_m":  {"map": 1200.0, "reduce": 990.0},
-    "iq3_xxs": {"map": 650.0,  "reduce": 450.0},
+    "iq4_xs":  {"map": 56.0,  "reduce": 41.0},
+    "iq3_xxs": {"map": 650.0, "reduce": 450.0},
 }
 
-DEFAULT_MODEL = "q4_k_m"
+DEFAULT_MODEL = "iq4_xs"
 
 
 def _key(model_key: str = "") -> str:
@@ -65,6 +71,18 @@ def _key(model_key: str = "") -> str:
     """
     from . import config
 
+    if model_key == "external":
+        # An external server's speed is a property of the port, not of our
+        # backend -- we did not choose its model, its quantisation or where
+        # its layers live. Filing it under the port keeps it away from the
+        # real model keys and lets two ports be timed separately. It cannot
+        # tell that one port has been repointed at a different model; the
+        # estimate would be wrong for one run and re-measured on the next,
+        # which is the same thing that happens when a card is changed.
+        try:
+            return "external:%d" % config.external_llm()[1]
+        except Exception:  # noqa: BLE001
+            return "external"
     try:
         backend = config.backend("llama")
     except Exception:  # noqa: BLE001 - never let calibration break a job

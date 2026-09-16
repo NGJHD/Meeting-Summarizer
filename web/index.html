@@ -63,10 +63,15 @@
       <label class="field">
         <span class="field-label">Model
           <span class="tip" tabindex="0" role="note"
-                aria-label="Low Quality suits machines with about 8GB of video memory. High Quality suits machines with about 16GB or more."
-                data-tip="Low Quality is for machines with about 8GB of video memory. High Quality is for machines with about 16GB or more, and writes noticeably more accurate minutes.">?</span>
+                aria-label="Low Quality suits machines with about 8GB of video memory. High Quality suits machines with about 16GB or more. Port sends the work to a language model server you are already running."
+                data-tip="Low Quality is for machines with about 8GB of video memory. High Quality is for machines with about 16GB or more, and writes noticeably more accurate minutes. Port sends the work to a language model server you are already running on this computer.">?</span>
         </span>
-        <select id="model"></select>
+        <select id="model" class="model-select"></select>
+      </label>
+      <label class="field" id="port-field" hidden>
+        <span class="field-label">Port</span>
+        <input type="number" id="port" min="1024" max="65535" step="1"
+               inputmode="numeric" value="9931">
       </label>
       <label class="field">
         <span class="field-label">Participants no.</span>

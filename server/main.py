@@ -26,7 +26,7 @@ from fastapi.responses import (
     StreamingResponse,
 )
 
-from . import config, hardware, jobs, merge, pipeline, speakers, updater, version
+from . import config, hardware, jobs, llm, merge, pipeline, speakers, updater, version
 
 
 def _prime_hardware() -> None:
@@ -108,6 +108,53 @@ async def model_choices() -> dict:
     """The model dropdown: what is installed, and what this card should use."""
     return await asyncio.to_thread(
         lambda: hardware.describe(hardware.detect_vram_mb()))
+
+
+@app.post("/api/models/choice")
+async def model_choice(request: Request):
+    """Remember the dropdown's state, whether or not a job is ever started.
+
+    Section 13.3 has the model default *detected*, not configured, and that
+    stays true for High and Low: picking one of those clears the flag, so the
+    next launch re-detects. "Port" is different in kind -- it is not a guess
+    about this card that we might make better next time, it is a fact about
+    the user's setup that we have no way of discovering -- so it is the one
+    choice that persists.
+
+    Written on change rather than on Process because the user asked for it
+    that way, and because the alternative loses the setting precisely when
+    somebody is experimenting with a port and not yet running anything.
+    """
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        pass
+    external = str(body.get("model") or "") == llm.EXTERNAL
+
+    port = None
+    if body.get("port") not in (None, ""):
+        try:
+            port = int(body["port"])
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "That port isn't a number."},
+                                status_code=400)
+        # 1-1023 are the privileged ports and 8000 is our own web server;
+        # pointing the LLM at either is a mistake worth catching here rather
+        # than as a puzzling connection failure an hour into a job.
+        if not 1024 <= port <= 65535:
+            return JSONResponse(
+                {"error": "Pick a port between 1024 and 65535."}, status_code=400)
+        if port == int(config.load_config()["server"].get("port", 8000)):
+            return JSONResponse(
+                {"error": "That's the port this page is served on. "
+                          "Use the one the language model is listening on."},
+                status_code=400)
+    try:
+        await asyncio.to_thread(config.save_llm_choice, external, port)
+    except (RuntimeError, OSError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+    return {"ok": True}
 
 
 @app.get("/api/current")
@@ -366,7 +413,10 @@ async def upload(request: Request):
                 mode: estimate_minutes(duration, mode, key)
                 for mode in ("summary", "minutes", "both")
             }
-            for key in hardware.BY_KEY
+            # "external" included: a server on a port is timed like any other
+            # model once it has completed a run, and until then the UI says
+            # "not known yet" for it exactly as it does for a new card.
+            for key in list(hardware.BY_KEY) + [llm.EXTERNAL]
         },
     }
 
@@ -431,7 +481,8 @@ async def start(job_id: str, request: Request):
     # Model choice. Detection picks the default; an explicit choice from the
     # dropdown overrides it, because the user may know something we do not.
     requested = str(body.get("model") or "")
-    job.model_key = requested if requested in hardware.BY_KEY else ""
+    job.model_key = (requested if requested in hardware.BY_KEY
+                     or requested == llm.EXTERNAL else "")
 
     try:
         cfg = config.load_config()

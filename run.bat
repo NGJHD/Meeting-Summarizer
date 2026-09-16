@@ -31,8 +31,22 @@ if not exist "models\ggml-large-v3-turbo.bin"         set "MISSING=!MISSING! mod
 if not exist "models\ggml-silero-v5.1.2.bin"          set "MISSING=!MISSING! models\ggml-silero-v5.1.2.bin"
 if not exist "models\segmentation-3.0.onnx"           set "MISSING=!MISSING! models\segmentation-3.0.onnx"
 if not exist "models\speaker-embedding.onnx"          set "MISSING=!MISSING! models\speaker-embedding.onnx"
-if not exist "models\Qwen3.8-27B-UD-IQ3_XXS.gguf"    set "MISSING=!MISSING! models\Qwen3.8-27B-UD-IQ3_XXS.gguf"
-if not exist "models\Qwen3.8-27B-UD-Q4_K_M.gguf"     set "MISSING=!MISSING! models\Qwen3.8-27B-UD-Q4_K_M.gguf"
+rem The language model weights are 25GB of the download, and they are not
+rem needed at all when the Model dropdown is set to "Port" -- that sends the
+rem work to a server the user is already running. Ask config.json rather than
+rem pattern-matching it here: "enabled": true appears under diarization too.
+set "EXTERNAL_LLM="
+"%~dp0runtime\python.exe" -c "import json,sys;sys.exit(0 if json.load(open('config.json')).get('llm',{}).get('external',{}).get('enabled') else 1)" 2>nul && set "EXTERNAL_LLM=1"
+rem At least one language model, not every one. A copy updated from 1.0.x has
+rem Q4_K_M and no UD-IQ4_XS -- the update payload carries no models\ -- and
+rem naming a file the updater cannot deliver would stop it starting.
+if not defined EXTERNAL_LLM (
+  set "HAVE_LLM="
+  if exist "models\Qwen3.8-27B-UD-IQ4_XS.gguf"  set "HAVE_LLM=1"
+  if exist "models\Qwen3.8-27B-UD-IQ3_XXS.gguf" set "HAVE_LLM=1"
+  if exist "models\Qwen3.8-27B-UD-Q4_K_M.gguf"  set "HAVE_LLM=1"
+  if not defined HAVE_LLM set "MISSING=!MISSING! models\Qwen3.8-27B-UD-IQ4_XS.gguf"
+)
 
 if not "!MISSING!"=="" (
   echo.

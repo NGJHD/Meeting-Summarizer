@@ -217,6 +217,16 @@ _DEFAULTS = {
         "port": 8080,
         "startup_timeout_s": 180,
         "idle_timeout_s": 300,
+        # Speculative decoding. "auto" turns on the model's own
+        # multi-token-prediction layer (blk.64.nextn.*) when the weights fit
+        # without an FFN offload, and leaves it off when they do not -- the
+        # draft context costs ~700 MiB and is not worth buying with more
+        # offload. "" forces it off, "draft-mtp" forces it on.
+        "spec_type": "auto",
+        # Talk to a llama-server somebody else is already running instead of
+        # launching our own. Chosen from the Model dropdown ("Port"), which is
+        # what writes these two keys; nothing else here is touched by the UI.
+        "external": {"enabled": False, "port": 9931},
     },
     "chunking": {
         "target_tokens": 10000,
@@ -231,6 +241,10 @@ _DEFAULTS = {
         "group_reduce": False,
         "reduce": True,
         "reduce_effort": "medium",
+        # Ceiling on thinking tokens for the final reduce, so reasoning cannot
+        # eat the whole of max_tokens and leave no document behind. 0 means
+        # unrestricted, which is llama.cpp's own default.
+        "reduce_budget_tokens": 4000,
     },
     "pipeline": {"concurrent_diarization": True},
     # "auto" detects; "cuda" / "vulkan" / "cpu" pin it.
@@ -296,6 +310,53 @@ def load_config() -> dict:
     return cfg
 
 
+def save_llm_choice(external: bool, port: int | None = None) -> None:
+    """Remember the Model dropdown's choice across restarts (section 13.3).
+
+    Only `llm.external` is written, and only the two keys the dropdown owns.
+    The file is read *raw* rather than through load_config(), so an operator's
+    hand-edited config keeps exactly the keys they put in it: writing the
+    merged result back would bake every current default into the file and
+    quietly freeze it against any later change to _DEFAULTS.
+
+    Picking High or Low clears the flag rather than pinning the quantisation --
+    the detection in hardware.choose_key is right far more often than a choice
+    made once on a machine that may since have had its card changed. The port
+    number survives either way, so switching back does not ask for it again.
+    """
+    raw: dict = {}
+    if CONFIG_PATH.exists():
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as fh:
+                raw = json.load(fh)
+        except (json.JSONDecodeError, OSError):
+            # A config we cannot parse is the operator's to fix; do not
+            # overwrite it with our own idea of what it should contain.
+            raise RuntimeError("config.json could not be read, so the choice "
+                               "was not saved.")
+    if not isinstance(raw, dict):
+        raise RuntimeError("config.json is not an object, so the choice was "
+                           "not saved.")
+    llm = raw.setdefault("llm", {})
+    ext = llm.setdefault("external", {})
+    ext["enabled"] = bool(external)
+    if port is not None:
+        ext["port"] = int(port)
+    write_atomic(CONFIG_PATH, json.dumps(raw, indent=2) + "\n")
+
+
+def external_llm(cfg: dict | None = None) -> tuple[bool, int]:
+    """(is an external server configured, which port)."""
+    if cfg is None:
+        cfg = load_config()
+    ext = cfg.get("llm", {}).get("external") or {}
+    try:
+        port = int(ext.get("port") or 9931)
+    except (TypeError, ValueError):
+        port = 9931
+    return bool(ext.get("enabled")), port
+
+
 def resolve(rel: str) -> Path:
     """Resolve a config path (always written relative to the app folder)."""
     p = Path(rel)
@@ -345,11 +406,23 @@ def missing_files() -> list[Path]:
     try:
         from . import hardware
 
-        requested = load_config()["llm"]["model"]
+        cfg = load_config()
+        if external_llm(cfg)[0]:
+            # Nothing local to check: the weights belong to whoever is running
+            # the server on that port. This is the one configuration in which
+            # the app is useful without a 16 GB download.
+            return missing
+        requested = cfg["llm"]["model"]
         if requested in ("auto", "", None):
-            # Both are shipped, and the UI lets the user pick either, so both
-            # must be present -- not just whichever this card would default to.
-            wanted = [hardware.model_path(m["key"]) for m in hardware.MODELS]
+            # At least one, not all of them. The update payload carries no
+            # `models\`, so a copy updating from 1.0.x has Q4_K_M and no
+            # UD-IQ4_XS; demanding the file the updater cannot deliver would
+            # stop it starting. Any language model on disk is enough to run,
+            # and the dropdown marks the rest "(not downloaded)".
+            if not hardware.any_model_present():
+                wanted = [hardware.model_path(m["key"]) for m in hardware.MODELS]
+            else:
+                wanted = []
         else:
             wanted = [resolve(requested)]
         missing += [p for p in wanted if not p.exists()]
