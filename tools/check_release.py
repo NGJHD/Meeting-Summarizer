@@ -38,6 +38,24 @@ def check(ok: bool, label: str, detail: str = "") -> bool:
     return ok
 
 
+def _one_lower(v: tuple) -> str:
+    """A version genuinely below `v`, for asking "would an old copy update?".
+
+    Decrementing the patch alone is wrong whenever the patch is 0: 1.1.0 came
+    back as 1.1.0, which is not older than itself, so the check failed on the
+    first minor release ever cut and reported a healthy release as broken.
+    Borrow from the next field up instead.
+    """
+    major, minor, patch = v
+    if patch:
+        return "%d.%d.%d" % (major, minor, patch - 1)
+    if minor:
+        return "%d.%d.%d" % (major, minor - 1, 9)
+    if major:
+        return "%d.%d.%d" % (major - 1, 9, 9)
+    return "0.0.0"
+
+
 def main() -> int:
     installed = version.APP_VERSION
     print("\nInstalled version in server/version.py: %s\n" % installed)
@@ -72,8 +90,7 @@ def main() -> int:
             check(False, "%s finished uploading" % name, "state=%s" % a.get("state"))
 
     print("\nWhat an installed copy would do")
-    older = "%d.%d.%d" % (lambda v: (v[0], v[1], max(0, v[2] - 1)))(
-        version.parse_version(installed) or (0, 0, 1))
+    older = _one_lower(version.parse_version(installed) or (0, 0, 1))
     check(version.is_newer(tag, older),
           "an older copy (%s) is offered this release" % older)
 
