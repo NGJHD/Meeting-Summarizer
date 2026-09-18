@@ -22,7 +22,8 @@ from server import updater, version  # noqa: E402
 # DOWNLOAD_MODELS.bat fetches from these by name. Deleting either breaks every
 # future install, and the whisper one is our own compile -- it exists nowhere
 # else, because whisper.cpp publishes no Vulkan build for Windows.
-LOAD_BEARING = ("runtime-cpython-3.12.14", "whisper-vulkan-b4938")
+LOAD_BEARING = ("runtime-cpython-3.12.14", "whisper-vulkan-b4938",
+                "align-wav2vec2-base-960h")
 
 RELEASES_API = "https://api.github.com/repos/%s/releases" % version.GITHUB_REPO
 
@@ -102,7 +103,7 @@ def main() -> int:
         check(size < 50_000_000, "the download is small",
               "%.1f KB" % (size / 1024))
 
-    print("\nThe two pre-releases DOWNLOAD_MODELS.bat depends on")
+    print("\nThe pre-releases DOWNLOAD_MODELS.bat depends on")
     try:
         every = updater._get_json(RELEASES_API)
         tags = {str(r.get("tag_name")): r for r in every}
