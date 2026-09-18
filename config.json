@@ -11,7 +11,7 @@
     "startup_timeout_s": 180,
     "idle_timeout_s": 300,
     "external": {
-      "enabled": true,
+      "enabled": false,
       "port": 9931
     }
   },

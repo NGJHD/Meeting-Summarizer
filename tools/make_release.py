@@ -24,6 +24,7 @@ ones do travel and why.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import zipfile
@@ -96,7 +97,36 @@ def write(target: Path, extras: bool) -> None:
             z.write(src, "%s/%s" % (PREFIX, rel))
 
 
+def check_shippable_config() -> None:
+    r"""Refuse to build if config.json carries this machine's local state.
+
+    config.json is tracked -- it is the default a new install gets -- and the
+    app also writes to it: choosing Port in the Model dropdown sets
+    `llm.external` (CLAUDE.md section 13.3). So anyone who runs the app while
+    developing dirties the file, and `git add -A` ships it.
+
+    That happened. 1.2.0 through 1.2.2 shipped `external.enabled: true`, so
+    every fresh install defaulted to a llama-server on port 9931 that was not
+    running on that machine, and failed only after transcription and
+    diarization had already been paid for. Existing installs were spared purely
+    because version.PRESERVE keeps config.json across an update.
+
+    This fails the build rather than quietly normalising the file: the working
+    tree and the zip should not disagree about what was shipped.
+    """
+    cfg = json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
+    external = (cfg.get("llm") or {}).get("external") or {}
+    if external.get("enabled"):
+        raise SystemExit(
+            "config.json has llm.external.enabled = true. "
+            "That is this machine's Port selection, not a shippable "
+            "default. Set it to false, or pick High or Low Quality in the "
+            "app, then rebuild."
+        )
+
+
 def main() -> None:
+    check_shippable_config()
     v = version.APP_VERSION
     out = ROOT.parent
     plain = out / ("%s-v%s.zip" % (PREFIX, v))

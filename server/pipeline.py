@@ -35,6 +35,12 @@ def run(job: Job, cfg: dict) -> None:
     timings: dict[str, float] = {}
 
     try:
+        # Before anything expensive: if the job will end up talking to a server
+        # somebody else is running, make sure it is there. Discovering it is
+        # not, after transcribing and diarizing a three-hour recording, is an
+        # avoidable way to waste twenty minutes.
+        llm.preflight_external(job, cfg)
+
         # -- Stage 1: convert -------------------------------------------
         job.set_stage("convert")
         t0 = time.time()

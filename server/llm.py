@@ -136,6 +136,41 @@ def fill(template: str, **values: str) -> str:
     return template
 
 
+def preflight_external(job, cfg: dict) -> None:
+    """Fail immediately if Port is selected and nothing is listening.
+
+    The LLM is not contacted until after transcription and diarization, so that
+    everything is out of VRAM before the model loads (section 11.1). The cost
+    is that "nothing answered on that port" surfaces fifteen minutes into a job
+    that was never going to finish.
+
+    A TCP connect to 127.0.0.1 is instant and local -- no part of constraint 1
+    is in play -- so the answer is available before any work is done. Only
+    connectivity is checked here; whether the server is *healthy* is still
+    LlamaServer.start()'s business at the point it attaches.
+    """
+    import socket
+
+    external, port = config.external_llm(cfg)
+    if job.model_key and job.model_key != EXTERNAL:
+        return                      # an explicit High/Low choice overrides
+    if not external and job.model_key != EXTERNAL:
+        return
+    sock = socket.socket()
+    sock.settimeout(1.5)
+    try:
+        sock.connect(("127.0.0.1", int(port)))
+    except OSError:
+        raise JobError(
+            EXTERNAL_FAILED,
+            "nothing listening on 127.0.0.1:%d at job start" % int(port),
+        )
+    finally:
+        sock.close()
+    job.log("llm: port %d is listening; the language model stages will use it"
+            % int(port))
+
+
 class LlamaServer:
     """Owns the llama-server process for the life of one job."""
 

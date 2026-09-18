@@ -3169,3 +3169,43 @@ Against the live release, with the models moved aside to simulate an upgraded
 1.0.3 install: the notice appears, the button downloads with a live byte count,
 both files arrive SHA-256 identical, the notice disappears by itself, and
 `/api/components` returns empty.
+
+## 9am. The shipped config.json carried this machine's Port selection
+
+Reported after downloading a fresh 1.2.2: the Model dropdown defaulted to
+**Port**, on a machine with nothing listening on 9931.
+
+`config.json` is tracked, because it is the default a new install gets. The app
+also writes to it -- choosing Port in the dropdown sets `llm.external`
+(CLAUDE.md section 13.3). So developing with Port selected dirties a tracked
+file, and `git add -A` ships it. Commit 80d7e0e did exactly that, and 1.2.0
+through 1.2.2 all carry `external.enabled: true`.
+
+**Existing installs were never affected**: `version.PRESERVE` is
+`("config.json",)`, so an update leaves it alone. Only a fresh install from
+`-full.zip` saw it.
+
+Two fixes, because the default being wrong and the failure being late are
+separate problems:
+
+### The build refuses to ship a dirty config
+
+`make_release.check_shippable_config` fails the build when
+`llm.external.enabled` is true. It fails rather than normalising: the working
+tree and the zip should not disagree about what was shipped. Verified by
+setting it true and watching the build refuse.
+
+### The failure now happens before the work, not after it
+
+The LLM is not contacted until after transcription and diarization, so that
+nothing else is in VRAM when the model loads (section 11.1). The cost is that
+"nothing answered on that port" surfaces fifteen minutes into a job that could
+never finish -- which is what a fresh install would have hit.
+
+`llm.preflight_external` does a TCP connect to `127.0.0.1` at job start, before
+ffmpeg. Local, instant, and no part of constraint 1 is in play. It checks
+reachability only; whether the server is *healthy* remains
+`LlamaServer.start()`'s business at the point it attaches.
+
+Verified across all three arms: external off does not probe at all, external on
+with a dead port refuses immediately, external on with a listening port passes.
