@@ -3209,3 +3209,62 @@ reachability only; whether the server is *healthy* remains
 
 Verified across all three arms: external off does not probe at all, external on
 with a dead port refuses immediately, external on with a listening port passes.
+
+## 9an. The browser cached the frontend, so the fix was invisible
+
+Reported: a fresh 1.0.3 updated to 1.2.3 and showed none of the new UI. The
+missing-component notice appeared only after clearing the browser cache, which
+nobody has any reason to do.
+
+The frontend is served with no `Cache-Control` at all. That is not "do not
+cache" -- it is *heuristic* caching, where the browser decides for itself how
+long a 200 stays fresh and serves it without asking. The updater replaces
+`app.js` and `index.html` underneath a tab that goes on running the old ones.
+
+Every route now sends `Cache-Control: no-cache, must-revalidate`, which means
+"ask before reusing", not "never store". The ETag `FileResponse` already sets
+makes the usual answer cheap, and on 127.0.0.1 even a full re-send is nothing.
+
+**This made 9al ineffective in exactly the case it was written for.** The
+component check shipped in 1.2.2 and did work -- but the person most likely to
+need it is upgrading from an old version, and they are also the person most
+likely to have a stale `app.js` cached. A fix nobody can see is not a fix, which
+is the second time that sentence applies in this file.
+
+## 9ao. Offering the language model the machine should have
+
+An install updating from 1.0.x keeps the `Q4_K_M` it downloaded and never
+receives `UD-IQ4_XS`: the update payload carries no `models\`. It runs -- the
+legacy entry in `hardware.LEGACY_MODELS` exists so it can -- about 3.4x slower
+than the model it should be using (section 9z), and nothing says so.
+
+The front-page notice now offers it, next to the word aligner.
+
+**Not in `EXTRA_MODELS`.** Those are fetched automatically during an update,
+which is correct for 360 MB and completely wrong for 14 GB: an update must
+never silently become a download that size. `offered_language_model()` is only
+ever *offered*, with the size stated, behind a button.
+
+### It asks what the machine should have, not what it will run
+
+The first version called `hardware.choose_key()`, which answers the wrong
+question: it picks from what is **on disk**. An install carrying Q4_K_M is
+offered Q4_K_M, nothing is missing, and the faster model is never mentioned --
+precisely the case this exists for. Caught by simulating it: the IQ4_XS file was
+moved aside and the endpoint reported nothing missing.
+
+It now picks from `hardware.MODELS` -- the shipped set -- by VRAM, with the same
+unified-memory rule `choose_key` applies. Only the recommended one is offered:
+suggesting the 14.3 GB model to a machine that will run the 10.9 GB one is a
+14 GB mistake, and offering both is a 25 GB one.
+
+### Two wording bugs, both only visible in a browser
+
+- The notice explained every missing thing as *"speaker attribution and summary
+  quality are noticeably worse"*, which is true of the aligner and nonsense
+  about a language model. Each component now carries its own `reason`.
+- Sizes were rendered in GiB: **13.3 GB** beside a dropdown saying **14.3 GB**,
+  which reads as two different files. Decimal throughout now, matching the
+  registry and the documentation.
+
+Neither is visible to a linter, and both were obvious on screen.

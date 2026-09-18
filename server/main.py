@@ -83,9 +83,25 @@ DISK_HEADROOM_MULTIPLIER = 3        # upload + WAV + headroom (section 5)
 # static frontend
 # ---------------------------------------------------------------------------
 
+# Revalidate the frontend on every load.
+#
+# With no Cache-Control at all a browser applies heuristic caching: it decides
+# for itself how long a 200 stays fresh, and serves it without asking. The
+# updater replaces app.js and index.html underneath a tab that then keeps
+# running the old ones -- reported after a 1.0.3 install updated to 1.2.3 and
+# showed none of the new version's UI until the cache was cleared by hand,
+# which nobody has any reason to do.
+#
+# "no-cache" does not mean "do not cache". It means "ask before reusing", so
+# the ETag and Last-Modified that FileResponse already sets still make the
+# usual answer a 304 with no body. On 127.0.0.1 that costs nothing.
+NO_CACHE = {"Cache-Control": "no-cache, must-revalidate"}
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index() -> HTMLResponse:
-    return HTMLResponse((config.WEB / "index.html").read_text(encoding="utf-8"))
+    return HTMLResponse((config.WEB / "index.html").read_text(encoding="utf-8"),
+                        headers=NO_CACHE)
 
 
 @app.get("/app.js")
@@ -95,12 +111,15 @@ async def app_js() -> FileResponse:
         # charset matters: app.js contains literal play/stop glyphs, and
         # without it some browsers decode the file as latin-1.
         media_type="application/javascript; charset=utf-8",
+        headers=NO_CACHE,
     )
 
 
 @app.get("/style.css")
 async def style_css() -> FileResponse:
-    return FileResponse(config.WEB / "style.css", media_type="text/css; charset=utf-8")
+    return FileResponse(config.WEB / "style.css", media_type="text/css; charset=utf-8",
+        headers=NO_CACHE,
+    )
 
 
 @app.get("/api/models")
@@ -271,7 +290,15 @@ async def components() -> dict:
     So the new version asks the question itself, on its own front page, and
     offers one button. See BUILD_NOTES section 9al.
     """
-    missing = updater.missing_models()
+    missing = list(updater.missing_models())
+    # The language model this machine should have, if it lacks it. An install
+    # updating from 1.0.x keeps the Q4_K_M it downloaded and never receives
+    # UD-IQ4_XS, because the update payload carries no models -- it runs, about
+    # 3.4x slower, and nothing says why.
+    offer = updater.offered_language_model()
+    if offer:
+        missing.append(offer)
+
     # Grouped by capability, not by file: two files that make one feature work
     # should read as one missing thing.
     seen, components = set(), []
@@ -279,7 +306,7 @@ async def components() -> dict:
         name = m.get("component") or m["label"]
         if name not in seen:
             seen.add(name)
-            components.append(name)
+            components.append({"name": name, "reason": m.get("reason", "")})
     return {
         "missing": components,
         "files": len(missing),
@@ -295,7 +322,10 @@ async def components_fetch() -> dict:
     Constraint 1 permits exactly this shape of outbound request: the user asked
     for it, nothing happens on startup, on a timer or in the background.
     """
-    missing = updater.missing_models()
+    missing = list(updater.missing_models())
+    offer = updater.offered_language_model()
+    if offer:
+        missing.append(offer)
     if not missing:
         return {"ok": True, "nothing": True}
     if updater.state().get("phase") == "downloading":

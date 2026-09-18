@@ -13,7 +13,7 @@ import re
 
 APP_NAME = "Meeting Summariser"
 APP_AUTHOR = "Darren Ng"
-APP_VERSION = "1.2.3"
+APP_VERSION = "1.2.4"
 
 GITHUB_REPO = "NGJHD/Meeting-Summarizer"
 REPO_URL = "https://github.com/%s" % GITHUB_REPO

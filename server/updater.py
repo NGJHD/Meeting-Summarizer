@@ -239,6 +239,7 @@ EXTRA_MODELS = (
         # What the user loses without it, named once however many files it
         # takes. Two files are one capability, and the notice should say so.
         "component": "Word alignment",
+        "reason": "speaker attribution and summary quality are noticeably worse",
         "min_size": 350_000_000,
         "size_hint": 377_811_056,
         "label": "word alignment model",
@@ -248,6 +249,7 @@ EXTRA_MODELS = (
     {
         "path": "models/wav2vec2-align.json",
         "component": "Word alignment",
+        "reason": "speaker attribution and summary quality are noticeably worse",
         "min_size": 200,
         "size_hint": 277,
         "label": "word alignment labels",
@@ -255,6 +257,56 @@ EXTRA_MODELS = (
                "align-wav2vec2-base-960h/wav2vec2-align.json" % version.GITHUB_REPO,
     },
 )
+
+
+def offered_language_model() -> dict:
+    """The language model this machine should have, if it does not have it.
+
+    Deliberately NOT in EXTRA_MODELS. Those are fetched automatically during an
+    update, which is right for 360 MB and completely wrong for 14 GB -- an
+    update must never silently become a download that size. This one is only
+    ever offered, with its size stated, behind a button.
+
+    Only the *recommended* model is offered. Suggesting the 14.3 GB one to a
+    machine that will run the 10.9 GB one is a 14 GB mistake, and offering both
+    is a 25 GB one.
+    """
+    from . import hardware
+
+    try:
+        # NOT choose_key: that answers "what will this run?", and it answers it
+        # from what is on disk. An install carrying Q4_K_M gets Q4_K_M, nothing
+        # is missing, and the model that is 3.4x faster is never mentioned --
+        # which is the whole situation this exists to fix.
+        #
+        # The question here is "what should this machine have?", so the
+        # candidates are the shipped models only, picked by VRAM the same way.
+        vram = hardware.detect_vram_mb()
+        shipped = sorted(hardware.MODELS, key=lambda m: -m["min_vram_mb"])
+        if hardware.detect_gpu().get("uma"):
+            model = shipped[-1]           # unified memory never gets the large one
+        else:
+            model = next((m for m in shipped
+                          if vram is not None and vram >= m["min_vram_mb"]),
+                         shipped[-1])
+        if not model.get("url"):
+            return {}
+        key = model["key"]
+        path = hardware.model_path(key)
+        if path.exists() and path.stat().st_size >= model.get("min_size", 0):
+            return {}
+        return {
+            "path": str(path.relative_to(config.ROOT)).replace("\\", "/"),
+            "component": model["label"].split(":")[0].strip() + " language model",
+            "reason": "the app will fall back to a slower or lower-quality "
+                      "model it already has",
+            "label": model["label"],
+            "url": model["url"],
+            "min_size": model.get("min_size", 0),
+            "size_hint": int(model.get("size_gb", 0) * 1_000_000_000),
+        }
+    except Exception:  # noqa: BLE001 - never break the page over this
+        return {}
 
 
 def missing_models() -> list:

@@ -66,6 +66,15 @@ MODELS = [
         "label": "High Quality: Qwen3.8-27B-UD-IQ4_XS",
         "size_gb": 14.3,
         "min_vram_mb": HIGH_MIN_VRAM_MB,
+        # Where it comes from, pinned to the same immutable revision
+        # DOWNLOAD_MODELS.bat uses. Here so the app can offer the download
+        # itself: an install updating from 1.0.x keeps its Q4_K_M and would
+        # otherwise never receive this one without being told to re-run a
+        # batch file nobody knows about (BUILD_NOTES 9an).
+        "url": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/"
+               "4ca720788d1e01f1bff70c033e0d0028fd02e502/"
+               "Qwen3.8-27B-UD-IQ4_XS.gguf?download=true",
+        "min_size": 14_000_000_000,
         # Multi-token prediction, from the layer inside the file itself
         # (blk.64.nextn.*). Applied only when the model fits without offload --
         # see llm.LlamaServer.spec_type.
@@ -77,6 +86,10 @@ MODELS = [
         "label": "Low Quality: Qwen3.8-27B-UD-IQ3_XXS",
         "size_gb": 10.9,
         "min_vram_mb": 0,
+        "url": "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/"
+               "4ca720788d1e01f1bff70c033e0d0028fd02e502/"
+               "Qwen3.8-27B-UD-IQ3_XXS.gguf?download=true",
+        "min_size": 10_000_000_000,
         "spec": "draft-mtp",
     },
 ]

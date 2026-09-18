@@ -312,7 +312,13 @@
 
 
   function humanMB(bytes) {
-    return Math.round(bytes / 1048576) + " MB";
+    // Decimal GB/MB, matching how the model dropdown and the docs quote sizes.
+    // Showing 13.3 GiB beside a dropdown that says 14.3 GB reads as two
+    // different files.
+    if (bytes >= 1e9) {
+      return (bytes / 1e9).toFixed(1).replace(/\.0$/, "") + " GB";
+    }
+    return Math.round(bytes / 1e6) + " MB";
   }
 
   function checkComponents() {
@@ -321,12 +327,15 @@
       .then(function (d) {
         var box = $("component-notice");
         if (!d.missing || !d.missing.length) { box.hidden = true; return; }
-        var names = d.missing.join(" and ");
+        var names = d.missing.map(function (m) { return m.name; }).join(" and ");
+        // Each component says what is lost without it: "speaker attribution is
+        // worse" is true of the aligner and nonsense about a language model.
+        var why = d.missing.map(function (m) { return m.reason; })
+                           .filter(Boolean).join(", and ");
         $("component-text").textContent =
           names + (d.missing.length > 1 ? " aren't" : " isn't") + " installed. " +
-          "Recordings will still process, but speaker attribution and summary " +
-          "quality are noticeably worse without it. One download of about " +
-          humanMB(d.bytes) + ".";
+          "Recordings will still process" + (why ? ", but " + why : "") +
+          ". One download of about " + humanMB(d.bytes) + ".";
         box.hidden = false;
         if (d.busy) { pollComponents(); }
       })
