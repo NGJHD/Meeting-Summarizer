@@ -13,6 +13,10 @@ Output is a meeting summary, minutes, or both, plus the full transcript. After a
 the three longest things each speaker said, type their names, and have the document
 tagged with the speaker names.
 
+Processing the same recording twice gives the same speakers. That sounds like it should
+go without saying; it did not hold before 1.3.0, and the measurement that shows it does
+now is in `BUILD_NOTES.md` §9au.
+
 ## Using it
 
 1. Download **`Meeting-Summariser-vX.Y.Z-full.zip`** from the latest release and unzip it
@@ -134,7 +138,10 @@ would rather build either yourself, the recipes are in `BUILD_NOTES.md`.
 
 - **`CLAUDE.md`** — the specification. Every design decision, and why.
 - **`BUILD_NOTES.md`** — what was actually measured: every flag that turned out not to
-  exist, every trap found the hard way, and the numbers behind each choice.
+  exist, every trap found the hard way, and the numbers behind each choice. It ends with
+  *What this codebase keeps teaching*, five patterns that each cost a day's work more
+  than once — worth reading before changing the updater, the frontend cache headers, or
+  anything that clusters.
 
 ## Licence
 

@@ -429,6 +429,11 @@ roughly 40 min transcribe + 30 min diarize, concurrent is roughly 45 min total.
 - **Budget threads explicitly.** Both processes will otherwise each claim ~8 threads and
   contend. `whisper.threads` and `diarization.threads` in `config.json` default to 6 each;
   their sum must not exceed the machine's logical core count minus 2.
+
+  `diarization.threads` is not purely a speed knob: a different count changes the
+  embeddings in the last decimal place (3.5e-07), which used to be enough to change the
+  speakers entirely. §8.1 removed that sensitivity, and this is why it mattered — a
+  setting the operator is invited to tune was silently a quality lottery.
 - **Failures are independent.** If diarization fails, transcription must continue to
   completion and the pipeline degrades to unattributed output. If transcription fails,
   cancel diarization and fail the job — there is nothing to merge.
@@ -567,16 +572,39 @@ recording and has been omitted."*
 from a real participant and will act on it either way. Encode that judgement here rather
 than leaving it to whoever reads the output.
 
-**The user may also just tell us.** §13 has an optional participant count. When supplied
-it is passed as the cluster count and distance thresholding is skipped entirely — by far
-the most reliable path. The cap in step 3 still applies as a guard.
+**The user may also just tell us.** §13 has an optional participant count. When supplied,
+cluster by distance as usual and then merge centroids down to that count
+(`merge_to_count`). The cap in step 3 still applies as a guard.
 
-**When a count is given, skip the centroid merge as well.** It exists to repair
-over-fragmentation from *automatic* thresholding; when the clusterer was told the answer
-there is nothing to repair and merging can only destroy it. Measured on a five-person
-meeting: `num_speakers: 5` clustered to exactly 5, and the merge then collapsed them to
-3 — silently overriding the one input this section calls the most reliable there is
-(`BUILD_NOTES.md` §9ab).
+**Never pass the count to the clusterer.** `FastClustering(num_clusters=K)` is not
+stable: a 3e-07 perturbation of the embeddings — the difference one thread count makes
+against another — flips it into an entirely different set of speakers, on two recordings
+measured, as often as half the time. Its *threshold* path does not do this. Measured as
+pair-counting agreement between runs, where 1.0 is identical:
+
+| | asking for a count | threshold + `merge_to_count` |
+|---|---|---|
+| 2h12m, heavy cross-talk | as low as **0.64** | **0.99** |
+| council 3h25m | as low as **0.84** | **1.00** |
+
+At 0.64 a third of all segment pairs are grouped differently between two runs of the same
+pipeline on the same audio. This is the single worst defect found in this component, and
+it sat under the input this document calls the most reliable one there is
+(`BUILD_NOTES.md` §9as, §9au).
+
+The merge is ours and deterministic: `argmin` breaks ties by lowest index, the same way
+every run. Prefer that to any library call whose tie-breaking you cannot see.
+
+**The distance-threshold merge does not also run.** There are two merges and only one
+applies at a time: `merge_to_count` when a count was given, `merge_close_clusters` when
+it was not. Running both would undo the count.
+
+That ordering was learned the expensive way. When the count *was* still passed to the
+clusterer, `merge_close_clusters` ran afterwards and collapsed it: `num_speakers: 5`
+clustered to exactly 5, and the merge reduced them to 3, silently overriding the one
+input this section calls the most reliable there is (`BUILD_NOTES.md` §9ab). The
+clustering has since moved (above), but the rule survives it — whatever reaches the
+requested count must be the last thing that touches the assignment.
 
 **Ask for speakers, not people.** A participant who speaks for under a minute cannot be
 resolved, and asking for them is actively worse: the clusterer reaches the requested
@@ -1026,8 +1054,9 @@ Single page, no framework, no bundler, no CDN references. Everything served loca
 
 4. Participant count — optional numeric input, *"How many people spoke? (optional —
    leave blank if unsure)"*. Blank means auto-cluster then prune (§8.1); a number is
-   passed straight to the clusterer, and both distance thresholding **and the centroid
-   merge** are skipped, which is much the most reliable path on a long recording.
+   used to merge the clusters down to that count after distance clustering, which is much
+   the most reliable path on a long recording. It is never passed to the clusterer itself
+   — see §8.1, that path is unstable.
 
    It means people who spoke *substantially*. Someone who said a few words in two hours
    cannot be separated, and asking for them costs a real speaker instead — see §8.1.
@@ -1327,6 +1356,13 @@ The build is done when all of these pass:
 17. Supplying a participant count produces exactly that many speakers. Verify the
     centroid merge did not reduce it afterwards — the log line reads `clusters N -> N`
     (§8.1).
+18. **The same recording processed twice produces the same speakers.** Not similar —
+    the same. This went unnoticed for the life of the project because nobody ran the
+    same file twice and compared; the numbers that exposed it came from
+    `tools/consensus_test.py`, which perturbs the embeddings by the amount a different
+    thread count produces and reports agreement between runs. Anything below about 0.99
+    means a user can process a file twice and be told a different story about who said
+    what.
 
 ---
 

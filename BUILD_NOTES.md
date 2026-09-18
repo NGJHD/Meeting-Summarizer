@@ -2806,6 +2806,12 @@ attribution one.
 
 ## 9ae. The partition is not stable, and TitaNet may have it wrong here
 
+> **Superseded by 9as-9au.** This section blames `diarization.threads`. That is a
+> symptom: thread count is merely one of many things that perturbs the embeddings by
+> 1e-07, and *any* such perturbation flipped the result because the clustering was
+> being asked to hit a target count. The instability was real and is now fixed; the
+> cause named here is not the cause.
+
 With `num_speakers: 4` the same audio gave materially different splits between a
 lab run (threads 6, share 28.9/32.6/5.3/33.2) and the production run (threads 5,
 share 31.0/8.7/5.9/54.4). Same model, same threshold, same count. Embedding under
@@ -2939,6 +2945,12 @@ change upstream of it. Any future comparison of document quality needs several
 runs per arm, or a lower temperature for the comparison.
 
 ## 9ai. Ground truth from the operator: CAM++ 6/6, TitaNet 4/6
+
+> **Read with 9at and 9au.** Each arm here is a *single* clustering, and at the time
+> a single TitaNet clustering was a coin flip between two partitions. Some of the
+> 6/6-against-4/6 gap was therefore luck. With the count path fixed (9au), TitaNet
+> scores 6/6 on these same clips. The conclusion drawn below -- that CAM++ is the
+> better embedder -- is not established by this evidence.
 
 The operator listened to the voice samples from two runs and identified two
 clips as the wrong speaker. Both are the same failure: cluster 03 swallowing
@@ -3528,3 +3540,79 @@ transcript and are probably unaffected; the clustering ones may not be.
 
 **Evidence limits.** Two recordings, nine perturbation trials each, six
 ground-truth points on one of them.
+
+---
+
+# What this codebase keeps teaching
+
+Five patterns cost most of a day between them, each more than once. They are
+recorded together because none of them is visible from inside the section it
+first appeared in.
+
+## 1. A self-updater can only fix the *next* update
+
+The update is carried out by the version being updated **from**: its
+`updater.py` downloads and verifies, its `run.bat` restarts. Nothing in the new
+version runs until it is already installed.
+
+So anything about *how an update behaves* -- fetching a newly-added model
+(9ak), the windows it opens (9aq), the console it leaves behind -- is fixed one
+release later than it is written. Three separate fixes were shipped believing
+they would help the person updating from an old version, and none of them
+could.
+
+What *does* work is the new version checking on its own behalf, once it is
+running (9al). If a release adds something users must have, the new version has
+to notice and say so; the update cannot be relied on to carry it.
+
+## 2. A response header cannot reach a browser that never asks
+
+`Cache-Control: no-cache` was added and did nothing, twice (9an, 9ap). The
+stale copy had been stored by the *previous* version, which sent no header at
+all, so the browser picked a freshness window of its own and inside it stopped
+asking. Headers govern responses that are requested; they cannot govern an entry
+that is never revalidated.
+
+Only a different URL defeats that, because it is a different cache key. The
+version is now in the asset URLs *and* the document URL -- the document matters,
+because a stale page references the old asset paths and never reaches the
+stamped ones.
+
+## 3. Measure the thing that varies, not one draw of it
+
+The deepest defect here (9as) went unnoticed for the life of the project because
+nobody ran the same file twice and compared. Worse, several constants were
+*tuned* on single draws from a distribution that had two very different outcomes
+-- and two of the measurements made while hunting this very bug were themselves
+single draws, one of which produced a confident retraction of a correct claim.
+
+Before trusting a number from this pipeline, ask whether the quantity behind it
+is stable. `tools/consensus_test.py` answers that: perturb the embeddings by the
+amount real machine variation produces and report agreement between runs.
+
+## 4. A library call is not a black box you can ignore
+
+`sherpa_onnx.FastClustering` is not stateless: the first call in a process
+returns a different partition from every call after it, on identical input. That
+is undocumented, and it silently invalidated every sweep `tools/diar_lab.py`
+produced, because the app clusters once per job and the tool clustered in a loop.
+
+It also offers no seed and no tie-break control, which is precisely why the fix
+in 9au was to take the final decision back into our own numpy, where `argmin`
+breaks ties by lowest index every run. Prefer code whose determinism you can
+read over a library call whose determinism you are assuming.
+
+## 5. Look at the running application
+
+Three defects shipped past a passing linter, a balanced-braces check and a
+manifest of every element id, and were obvious within seconds on screen:
+
+- *"The word alignment model and word alignment labels isn't installed"* --
+  plural subject, singular verb, because two files were being listed where the
+  user cares about one capability.
+- Every missing component explained as *"speaker attribution is worse"*, which
+  is true of the aligner and nonsense about a language model.
+- **13.3 GB** rendered beside a dropdown saying **14.3 GB**, because one was
+  GiB and the other decimal.
+
+None of these is reachable by a static check. A screenshot is a test.
