@@ -259,54 +259,53 @@ EXTRA_MODELS = (
 )
 
 
-def offered_language_model() -> dict:
-    """The language model this machine should have, if it does not have it.
+def offered_language_models() -> list:
+    r"""Every shipped language model this install does not have.
 
-    Deliberately NOT in EXTRA_MODELS. Those are fetched automatically during an
-    update, which is right for 360 MB and completely wrong for 14 GB -- an
-    update must never silently become a download that size. This one is only
-    ever offered, with its size stated, behind a button.
+    **Both**, not just the one this machine would pick. The folder is portable
+    by design (CLAUDE.md section 16: copy it to another drive and it works), so
+    the machine that downloads is often not the machine that runs -- somebody
+    fetches it on a laptop and copies it to an on-prem box with a far better
+    card. Offering only what the *downloading* machine needs quietly strips the
+    folder of the model the destination wanted, and that is why
+    DOWNLOAD_MODELS.bat fetches both rather than choosing.
 
-    Only the *recommended* model is offered. Suggesting the 14.3 GB one to a
-    machine that will run the 10.9 GB one is a 14 GB mistake, and offering both
-    is a 25 GB one.
+    Never in EXTRA_MODELS. Those are fetched automatically during an update,
+    which is right for 360 MB and completely wrong for 25 GB: an update must
+    never silently become a download that size. These are only ever offered,
+    with the size stated, behind a button.
+
+    The candidates are the shipped models -- NOT hardware.choose_key(), which
+    answers "what will this run?" from what is on disk, so an install carrying
+    the legacy Q4_K_M is told nothing is missing and never hears about the
+    model that is 3.4x faster (BUILD_NOTES 9z).
     """
     from . import hardware
 
+    out = []
     try:
-        # NOT choose_key: that answers "what will this run?", and it answers it
-        # from what is on disk. An install carrying Q4_K_M gets Q4_K_M, nothing
-        # is missing, and the model that is 3.4x faster is never mentioned --
-        # which is the whole situation this exists to fix.
-        #
-        # The question here is "what should this machine have?", so the
-        # candidates are the shipped models only, picked by VRAM the same way.
-        vram = hardware.detect_vram_mb()
-        shipped = sorted(hardware.MODELS, key=lambda m: -m["min_vram_mb"])
-        if hardware.detect_gpu().get("uma"):
-            model = shipped[-1]           # unified memory never gets the large one
-        else:
-            model = next((m for m in shipped
-                          if vram is not None and vram >= m["min_vram_mb"]),
-                         shipped[-1])
-        if not model.get("url"):
-            return {}
-        key = model["key"]
-        path = hardware.model_path(key)
-        if path.exists() and path.stat().st_size >= model.get("min_size", 0):
-            return {}
-        return {
-            "path": str(path.relative_to(config.ROOT)).replace("\\", "/"),
-            "component": model["label"].split(":")[0].strip() + " language model",
-            "reason": "the app will fall back to a slower or lower-quality "
-                      "model it already has",
-            "label": model["label"],
-            "url": model["url"],
-            "min_size": model.get("min_size", 0),
-            "size_hint": int(model.get("size_gb", 0) * 1_000_000_000),
-        }
+        for model in hardware.MODELS:
+            if not model.get("url"):
+                continue
+            path = hardware.model_path(model["key"])
+            try:
+                if path.exists() and path.stat().st_size >= model.get("min_size", 0):
+                    continue
+            except OSError:
+                pass
+            out.append({
+                "path": str(path.relative_to(config.ROOT)).replace("\\", "/"),
+                "component": model["label"].split(":")[0].strip() + " language model",
+                "label": model["label"],
+                "reason": "the app falls back to whatever model it already has, "
+                          "which may be slower or lower quality",
+                "url": model["url"],
+                "min_size": model.get("min_size", 0),
+                "size_hint": int(model.get("size_gb", 0) * 1_000_000_000),
+            })
     except Exception:  # noqa: BLE001 - never break the page over this
-        return {}
+        return []
+    return out
 
 
 def missing_models() -> list:
@@ -444,9 +443,17 @@ def install(url: str, size_bytes: int, tag: str, port: int) -> None:
         # cmd.exe is the executable and the script is its own argument: never
         # the script as the executable, never shell=True with an interpolated
         # path (BUILD_NOTES.md section 9q, trap 1).
+        # CREATE_NO_WINDOW, not DETACHED_PROCESS. Both keep the script alive
+        # after this process exits, but a detached cmd.exe allocates a console
+        # of its own -- so the update showed a second black window running the
+        # wait loop, beside the new app's window. CREATE_NO_WINDOW gives it a
+        # console with no window at all. The two flags are mutually exclusive;
+        # fall back if the constant is somehow unavailable, because a script
+        # that dies with its parent cannot copy the files.
+        flags = (CREATE_NO_WINDOW or DETACHED_PROCESS) | subprocess.CREATE_NEW_PROCESS_GROUP
         subprocess.Popen(
             [os.environ.get("ComSpec") or "cmd.exe", "/c", str(script)],
-            creationflags=DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+            creationflags=flags,
             close_fds=True,
         )
         _set(phase="restarting",
@@ -485,10 +492,25 @@ def _cleanup(stage) -> None:
         shutil.rmtree(stage, ignore_errors=True)
 
 
+UPDATING_MARKER = config.TEMP / "updating.flag"
+
+
 def _quit() -> None:
-    """Stop the server so the script can replace the files behind us."""
+    """Stop the server so the script can replace the files behind us.
+
+    Leaves a marker first. run.bat runs uvicorn in the foreground and pauses
+    when it returns, which is right when the app has crashed and wrong here:
+    the user watched a new window appear while the old one sat behind it
+    saying "Meeting Summariser has stopped", which reads as a failure. The
+    marker tells run.bat this exit was intentional so it closes quietly.
+    """
     from . import jobs
 
+    try:
+        UPDATING_MARKER.parent.mkdir(parents=True, exist_ok=True)
+        UPDATING_MARKER.write_text("1", encoding="utf-8")
+    except OSError:
+        pass
     jobs.shutdown_all()
     clear_running()
     os._exit(0)

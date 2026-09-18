@@ -15,6 +15,8 @@ from __future__ import annotations
 import sys
 import time
 import webbrowser
+
+from . import version
 from http.client import HTTPConnection
 
 TIMEOUT_S = 180.0
@@ -35,7 +37,10 @@ def ready(port: int) -> bool:
 
 def main(argv: list[str]) -> int:
     port = int(argv[1]) if len(argv) > 1 else 8000
-    url = "http://127.0.0.1:%d" % port
+    # The version is in the URL so that an update cannot be hidden by a page
+    # the browser cached from the previous one. Without it the browser may
+    # never ask the server again -- see main.index.
+    url = "http://127.0.0.1:%d/?v=%s" % (port, version.APP_VERSION)
 
     started = time.time()
     announced = 0.0

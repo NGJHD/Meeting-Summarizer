@@ -100,7 +100,21 @@ NO_CACHE = {"Cache-Control": "no-cache, must-revalidate"}
 
 @app.get("/", response_class=HTMLResponse)
 async def index() -> HTMLResponse:
-    return HTMLResponse((config.WEB / "index.html").read_text(encoding="utf-8"),
+    """The page, with the version stamped into every asset URL.
+
+    NO_CACHE alone cannot rescue a browser that cached this page from an older
+    build: with no Cache-Control at all, that response was given a freshness
+    window the browser chose, and inside it the browser does not ask -- it
+    serves the old page and never learns the header changed. Reported twice:
+    1.0.3 updated to 1.2.3 and then to 1.2.4 showing neither version's UI until
+    the cache was cleared by hand.
+
+    A header cannot fix an entry that is never revalidated. A different URL
+    can, because it is a different cache key -- so the asset URLs move with
+    APP_VERSION, and open_browser opens the page itself with the same stamp.
+    """
+    html = (config.WEB / "index.html").read_text(encoding="utf-8")
+    return HTMLResponse(html.replace("__APP_VERSION__", version.APP_VERSION),
                         headers=NO_CACHE)
 
 
@@ -295,9 +309,7 @@ async def components() -> dict:
     # updating from 1.0.x keeps the Q4_K_M it downloaded and never receives
     # UD-IQ4_XS, because the update payload carries no models -- it runs, about
     # 3.4x slower, and nothing says why.
-    offer = updater.offered_language_model()
-    if offer:
-        missing.append(offer)
+    missing.extend(updater.offered_language_models())
 
     # Grouped by capability, not by file: two files that make one feature work
     # should read as one missing thing.
@@ -323,9 +335,7 @@ async def components_fetch() -> dict:
     for it, nothing happens on startup, on a timer or in the background.
     """
     missing = list(updater.missing_models())
-    offer = updater.offered_language_model()
-    if offer:
-        missing.append(offer)
+    missing.extend(updater.offered_language_models())
     if not missing:
         return {"ok": True, "nothing": True}
     if updater.state().get("phase") == "downloading":

@@ -3268,3 +3268,69 @@ suggesting the 14.3 GB model to a machine that will run the 10.9 GB one is a
   registry and the documentation.
 
 Neither is visible to a linter, and both were obvious on screen.
+
+## 9ap. A header cannot fix a cache entry that is never revalidated
+
+9an added `Cache-Control: no-cache` and it did not work. Reported again: 1.0.3
+updated to 1.2.4 and still showed the old page until the cache was cleared by
+hand.
+
+The reason is the same shape as 9al. The stale entry was stored by the **old**
+server, which sent no `Cache-Control` at all, so the browser gave it a freshness
+window of its own choosing. Inside that window the browser does not ask -- it
+serves the old copy and never discovers that the header changed. A response
+header can only govern responses the browser actually requests.
+
+What defeats an entry that is never revalidated is a **different URL**, because
+that is a different cache key:
+
+- `index.html` references `/app.js?v=__APP_VERSION__` and the same for the
+  stylesheet; `main.index` substitutes `version.APP_VERSION` when serving.
+- `open_browser` opens `http://127.0.0.1:<port>/?v=<version>`, so the *document*
+  is a new key too -- without that the browser serves a stale page which
+  references the old asset URLs, and the stamped assets are never reached.
+- The `Open Meeting Summariser.url` shortcut written by run.bat carries it as
+  well.
+
+This works on the next update because the restart is performed by the new
+run.bat, which runs the new `open_browser`. The `no-cache` header stays: it
+stops the problem being created again for anyone whose cache is populated from
+here on.
+
+## 9aq. Two windows during an update, and a third that looked like a crash
+
+- **The update script had a console.** It was spawned with `DETACHED_PROCESS`,
+  under which `cmd.exe` allocates a console of its own, so a black window
+  running the `ping` wait loop appeared beside the new app's window.
+  `CREATE_NO_WINDOW` gives it a console with no window. The two flags are
+  mutually exclusive, so this is a swap rather than an addition, with a
+  fallback if the constant is unavailable -- a script that dies with its parent
+  cannot copy the files.
+
+- **The old console sat on `pause` saying "Meeting Summariser has stopped".**
+  Correct after a crash, wrong after an update: the user saw the new window
+  open while the old one claimed failure behind it. `_quit` now writes
+  `temp\updating.flag` and run.bat closes quietly when it finds it.
+
+**Both only take effect one update later.** The update is carried out by the
+installed version's `updater.py` and its `run.bat`, so 1.2.4 -> 1.2.5 still
+shows the old behaviour and 1.2.5 -> 1.2.6 is the first clean one. Same
+constraint as 9al; worth stating rather than letting it look unfixed.
+
+## 9ar. Offer every shipped model, not the one this machine would pick
+
+9ao offered only the recommended model, reasoning that suggesting 14.3 GB to a
+machine that will run 10.9 GB is a 14 GB mistake. That was wrong, and the
+operator's reason is the one already encoded in `DOWNLOAD_MODELS.bat`, which
+fetches both: **the folder is portable**. Section 16 requires that copying it to
+another drive or machine works unchanged, so the machine that downloads is
+routinely not the machine that runs -- fetched on a laptop, copied to an on-prem
+box with a far better card. Offering only what the downloading machine needs
+quietly strips the folder of the model the destination wanted.
+
+`offered_language_models()` returns every shipped model that is absent. On an
+install with neither, the notice reads 25.2 GB across 2 files, which is what
+`DOWNLOAD_MODELS.bat` would have fetched anyway.
+
+Still never in `EXTRA_MODELS`: 25 GB must not arrive automatically with an
+update.

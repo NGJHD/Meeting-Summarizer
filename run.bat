@@ -94,7 +94,11 @@ rem depends on which terminal Windows happens to be using, and on this machine
 rem it did not. Rewritten each launch so it always points at the live port.
 set "SHORTCUT=%~dp0Open Meeting Summariser.url"
 > "%SHORTCUT%" echo [InternetShortcut]
->>"%SHORTCUT%" echo URL=http://127.0.0.1:%PORT%
+rem The version is in the URL deliberately: a browser that cached the page
+rem from an older build may never revalidate it, and would show that old page
+rem after an update. A new query string is a new cache key.
+for /f "delims=" %%V in ('"%~dp0runtime\python.exe" -c "from server.version import APP_VERSION;print(APP_VERSION)"') do set "APPVER=%%V"
+>>"%SHORTCUT%" echo URL=http://127.0.0.1:%PORT%/?v=%APPVER%
 
 echo   [1/3] Program files found.
 echo   [2/3] Port %PORT% is free.
@@ -122,5 +126,13 @@ rem its own, so a 400MB upload streams straight through (BUILD_NOTES.md).
   --log-level warning
 
 echo.
+rem An update stops the server on purpose and opens a new window. Pausing
+rem here would leave the old console sitting behind it saying the app had
+rem stopped, which reads as a crash. The marker says it was intentional.
+if exist "temp\updating.flag" (
+  del /q "temp\updating.flag" >nul 2>&1
+  echo   Updating - this window will close.
+  exit /b 0
+)
 echo   Meeting Summariser has stopped.
 pause
