@@ -9,6 +9,7 @@
   // cancelled rewrite still has the finished meeting behind it.
   var state = { jobId: null, file: null, events: null, timer: null, started: 0,
                 docs: {}, phase: "run" };
+  var components = { timer: null };
 
   /* ---------------------------------------------------------------- boot */
 
@@ -169,6 +170,18 @@
   // The dropdown defaults to whatever this card can actually hold, but the
   // choice is the user's: they may know something the detection does not.
   function loadModels() {
+    // A model this version wants that this install does not have. The updater
+    // cannot fix this for anyone upgrading from before it existed -- the update
+    // is performed by the *old* version's code -- so the new version has to ask
+    // for itself. One button; nothing is fetched without a press.
+    checkComponents();
+    $("component-get").addEventListener("click", function () {
+      $("component-get").disabled = true;
+      fetch("/api/components/fetch", { method: "POST" })
+        .then(function () { pollComponents(); })
+        .catch(function () { $("component-get").disabled = false; });
+    });
+
     fetch("/api/models")
       .then(function (r) { return r.json(); })
       .then(function (d) {
@@ -296,6 +309,56 @@
   fileInput.addEventListener("change", function () {
     if (fileInput.files.length) { choose(fileInput.files[0]); }
   });
+
+
+  function humanMB(bytes) {
+    return Math.round(bytes / 1048576) + " MB";
+  }
+
+  function checkComponents() {
+    fetch("/api/components")
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var box = $("component-notice");
+        if (!d.missing || !d.missing.length) { box.hidden = true; return; }
+        var names = d.missing.join(" and ");
+        $("component-text").textContent =
+          names + (d.missing.length > 1 ? " aren't" : " isn't") + " installed. " +
+          "Recordings will still process, but speaker attribution and summary " +
+          "quality are noticeably worse without it. One download of about " +
+          humanMB(d.bytes) + ".";
+        box.hidden = false;
+        if (d.busy) { pollComponents(); }
+      })
+      .catch(function () { /* offline is fine; the app works regardless */ });
+  }
+
+  function pollComponents() {
+    $("component-get").disabled = true;
+    $("component-bar").hidden = false;
+    if (components.timer) { return; }
+    components.timer = setInterval(function () {
+      fetch("/api/update/progress")
+        .then(function (r) { return r.json(); })
+        .then(function (p) {
+          if (p.total) {
+            $("component-fill").style.width = (p.downloaded / p.total * 100) + "%";
+            $("component-text").textContent = p.message + " — " +
+              humanSize(p.downloaded) + " of " + humanSize(p.total);
+          }
+          if (p.phase === "error") {
+            clearInterval(components.timer); components.timer = null;
+            $("component-text").textContent = p.message;
+            $("component-get").disabled = false;
+            $("component-bar").hidden = true;
+          } else if (p.phase === "idle" && p.total === 0) {
+            clearInterval(components.timer); components.timer = null;
+            $("component-notice").hidden = true;
+          }
+        })
+        .catch(function () { /* transient */ });
+    }, 500);
+  }
 
   function humanSize(n) {
     if (n >= 1e9) return (n / 1e9).toFixed(2) + " GB";

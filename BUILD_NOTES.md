@@ -3118,3 +3118,54 @@ missing.
 **Fresh installs are unaffected either way** -- the model travels inside
 `-full.zip`, and `DOWNLOAD_MODELS.bat` fetches it for a source install. This
 was only ever the upgrade path.
+
+## 9al. A self-updater cannot install its own improvements
+
+9ak added `updater.EXTRA_MODELS` so an update that adds a model brings the
+model. It does not work for the people who need it, and the reason is
+structural: **the update is carried out by the old version's code.** The batch
+script only waits, copies and restarts; everything before it -- download,
+verify, and the new model fetch -- runs in the Python that is already
+installed.
+
+So an install on 1.0.3, which is where most of them are, runs 1.0.3's
+`install()`. That has never heard of `EXTRA_MODELS`. It lands on the new code
+with the model absent, exactly as before. The fix in 9ak only covers 1.2.1 and
+later upgrading to something later still, which is nobody yet.
+
+A self-updater can only ever improve *the next* update. Anything that must be
+true after upgrading from an arbitrary old version has to be checked by the new
+version, at startup, on its own.
+
+### What the new version does
+
+`GET /api/components` is a purely local filesystem check -- nothing is fetched
+and nothing is contacted -- reporting which `EXTRA_MODELS` are absent or
+truncated. When any are, the front page carries a notice and one button, which
+posts to `/api/components/fetch`.
+
+Constraint 1 permits exactly this shape: the user pressed a button. Nothing
+checks on startup, on a timer, or in the background -- the *check* is local, and
+only the *download* leaves the machine, on an explicit press.
+
+The notice is on the front page rather than in the About overlay deliberately.
+It changes the quality of every summary produced, and the entire failure being
+fixed is one that nobody could see.
+
+### Grouped by capability, not by file
+
+Two files make word alignment work, and the first version of the notice listed
+both: *"The word alignment model and word alignment labels isn't installed"* --
+wrong number, and wrong unit. `EXTRA_MODELS` entries now carry a `component`,
+and the notice names what the user loses once, however many files it takes.
+
+Found by looking at it in a browser. The static checks passed -- balanced
+braces, every element id resolving -- and neither can see a sentence that does
+not agree with itself.
+
+### Verified
+
+Against the live release, with the models moved aside to simulate an upgraded
+1.0.3 install: the notice appears, the button downloads with a live byte count,
+both files arrive SHA-256 identical, the notice disappears by itself, and
+`/api/components` returns empty.

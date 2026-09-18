@@ -257,6 +257,68 @@ async def about() -> dict:
     }
 
 
+@app.get("/api/components")
+async def components() -> dict:
+    """Optional models this version wants that this install does not have.
+
+    A purely local check -- nothing is fetched, nothing is contacted. It exists
+    because a self-updater cannot install its own improvements: the update is
+    carried out by the *old* version's code, so a release that adds a model
+    cannot bring it to anyone who is not already running a version that knows
+    about it. Most installs upgrade from well before that, land on the new
+    code with the model absent, and degrade silently.
+
+    So the new version asks the question itself, on its own front page, and
+    offers one button. See BUILD_NOTES section 9al.
+    """
+    missing = updater.missing_models()
+    # Grouped by capability, not by file: two files that make one feature work
+    # should read as one missing thing.
+    seen, components = set(), []
+    for m in missing:
+        name = m.get("component") or m["label"]
+        if name not in seen:
+            seen.add(name)
+            components.append(name)
+    return {
+        "missing": components,
+        "files": len(missing),
+        "bytes": sum(m.get("size_hint", 0) for m in missing),
+        "busy": updater.state().get("phase") == "downloading",
+    }
+
+
+@app.post("/api/components/fetch")
+async def components_fetch() -> dict:
+    """Download the missing optional models. One explicit button press.
+
+    Constraint 1 permits exactly this shape of outbound request: the user asked
+    for it, nothing happens on startup, on a timer or in the background.
+    """
+    missing = updater.missing_models()
+    if not missing:
+        return {"ok": True, "nothing": True}
+    if updater.state().get("phase") == "downloading":
+        return {"ok": True, "already": True}
+
+    def work() -> None:
+        try:
+            failed = updater.fetch_models(missing)
+            if failed:
+                updater._set(phase="error", message=(
+                    "Couldn't download: %s. The app still works without it."
+                    % ", ".join(m["label"] for m in failed)))
+            else:
+                updater._set(phase="idle", message="", downloaded=0, total=0)
+        except Exception as exc:  # noqa: BLE001
+            jobs.log_exception(exc)
+            updater._set(phase="error",
+                         message="The download didn't finish. Nothing was changed.")
+
+    threading.Thread(target=work, name="components", daemon=True).start()
+    return {"ok": True}
+
+
 @app.post("/api/update/check")
 async def update_check() -> dict:
     """Ask GitHub whether there is a newer release.

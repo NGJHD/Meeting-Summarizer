@@ -236,6 +236,9 @@ def _download(url: str, dest: Path, total_hint: int) -> None:
 EXTRA_MODELS = (
     {
         "path": "models/wav2vec2-align.onnx",
+        # What the user loses without it, named once however many files it
+        # takes. Two files are one capability, and the notice should say so.
+        "component": "Word alignment",
         "min_size": 350_000_000,
         "size_hint": 377_811_056,
         "label": "word alignment model",
@@ -244,6 +247,7 @@ EXTRA_MODELS = (
     },
     {
         "path": "models/wav2vec2-align.json",
+        "component": "Word alignment",
         "min_size": 200,
         "size_hint": 277,
         "label": "word alignment labels",
