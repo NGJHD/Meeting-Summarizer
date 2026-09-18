@@ -380,6 +380,47 @@ def merge_close_clusters(
     return out, merges
 
 
+def merge_to_count(assignment, embeddings, weights, target: int):
+    """Merge the closest centroids until exactly `target` clusters remain.
+
+    `FastClustering(num_clusters=K)` is not stable when asked for a count: a
+    3e-07 perturbation of the embeddings -- the difference a different thread
+    count produces -- flips its answer about half the time, and the two answers
+    are entirely different sets of speakers (BUILD_NOTES 9as). Its *threshold*
+    path does not do this: measured over 14 runs it returned the same partition
+    every time but one.
+
+    So take the stable path and finish the job here. Over-cluster by distance,
+    then merge centroids down to the requested count in numpy, where the
+    arithmetic is ours and the tie-break is defined: `argmin` takes the lowest
+    index, so equal distances resolve the same way every run.
+
+    This is `merge_close_clusters` with a count as the stopping condition
+    instead of a distance, and it exists for the same reason: a centroid is an
+    average over hundreds of vectors and is far better conditioned than any
+    single one.
+    """
+    out = assignment.copy()
+    merges = 0
+    while True:
+        ids = sorted(set(int(c) for c in out if c >= 0))
+        if len(ids) <= target or len(ids) < 2:
+            break
+        unit = _unit(embeddings)
+        cent = np.stack([_unit(unit[out == c].mean(axis=0, keepdims=True))[0]
+                         for c in ids])
+        dist = 1.0 - cent @ cent.T
+        np.fill_diagonal(dist, np.inf)
+        i, j = np.unravel_index(np.argmin(dist), dist.shape)
+        a, b = ids[int(i)], ids[int(j)]
+        wa = weights[out == a].sum()
+        wb = weights[out == b].sum()
+        loser, winner = (a, b) if wa < wb else (b, a)
+        out[out == loser] = winner
+        merges += 1
+    return out, merges
+
+
 def prune(
     cluster_labels: np.ndarray,
     embeddings: np.ndarray,
@@ -621,11 +662,19 @@ def main(argv: list[str]) -> int:
 
         _emit("STAGE cluster")
         t0 = time.time()
-        raw = cluster(
-            embeddings,
-            int(params.get("num_speakers", 0)),
-            float(params.get("cluster_threshold", 0.7)),
-        )
+        # Always cluster by distance, never by count.
+        #
+        # FastClustering(num_clusters=K) is not stable: a 3e-07 perturbation of
+        # the embeddings -- the difference one thread count makes against
+        # another -- flips its answer about half the time, into an entirely
+        # different set of speakers. Its threshold path does not: 14 runs under
+        # the same perturbation returned the same partition but once
+        # (BUILD_NOTES 9as, 9au).
+        #
+        # So over-cluster on the stable path and reach the requested count in
+        # merge_to_count, which is ours and deterministic.
+        want = int(params.get("num_speakers", 0))
+        raw = cluster(embeddings, 0, float(params.get("cluster_threshold", 0.7)))
         timings["cluster"] = time.time() - t0
 
         total_speech_s = float(weights.sum()) / seg_m.sample_rate
@@ -639,9 +688,11 @@ def main(argv: list[str]) -> int:
         # cross-talk: num_speakers=5 clustered to exactly 5, and the merge then
         # collapsed them to 3, silently overriding the one input CLAUDE.md
         # section 13.4 calls the most reliable path there is.
-        explicit = int(params.get("num_speakers", 0)) > 0
+        explicit = want > 0
         if explicit:
-            merges = 0
+            # Down to exactly what the user asked for, by centroid distance.
+            assignment, merges = merge_to_count(
+                assignment, embeddings, weights, want)
         else:
             assignment, merges = merge_close_clusters(
                 assignment, embeddings, weights,

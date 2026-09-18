@@ -336,8 +336,19 @@ def fetch_models(items: list) -> list:
     for n, m in enumerate(items, 1):
         target = config.ROOT / m["path"]
         partial = target.with_suffix(target.suffix + ".partial")
+        # Count components, not files. Word alignment is two files and one
+        # thing the user is waiting for; "1 of 3" against a notice that named
+        # two components invites the question of what the third one is.
+        groups = []
+        for x in items:
+            name = x.get("component") or x["label"]
+            if name not in groups:
+                groups.append(name)
+        this = (m.get("component") or m["label"])
         _set(phase="downloading",
-             message="Downloading the %s (%d of %d)" % (m["label"], n, len(items)),
+             message=("Downloading %s (%d of %d)"
+                      % (this, groups.index(this) + 1, len(groups))
+                      if len(groups) > 1 else "Downloading %s" % this),
              downloaded=0, total=m.get("size_hint") or 0)
         try:
             target.parent.mkdir(parents=True, exist_ok=True)

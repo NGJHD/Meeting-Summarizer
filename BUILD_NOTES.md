@@ -3334,3 +3334,197 @@ install with neither, the notice reads 25.2 GB across 2 files, which is what
 
 Still never in `EXTRA_MODELS`: 25 GB must not arrive automatically with an
 update.
+
+## 9as. The clustering decides by coin flip, and section 9ae named the wrong cause
+
+Chasing why two runs of the same pipeline on the same audio produced different
+speakers. Section 9ae blamed `diarization.threads`. That is a symptom.
+
+Measured, each clustering call in its own process (which matters -- see below):
+
+| stage | thread-dependent? |
+|---|---|
+| segmentation | **no** -- bitwise identical labels at 5 and 6 threads |
+| embedding | yes, but only just: max delta **3.5e-07** |
+| clustering | deterministic given its input |
+
+So nothing here is a race and nothing is random. Every stage is reproducible.
+What is not reproducible is the *composition*: a 1e-7 difference in the
+embeddings changes which speakers come out.
+
+### How often
+
+Perturbing the embeddings by 3e-07 -- the magnitude a different thread count
+actually produces -- twelve times, `num_speakers: 4`:
+
+    38.7 / 30.1 / 24.6 / 6.6   x6      the balanced partition
+    59.9 / 24.6 /  8.4 / 7.1   x5      one cluster swallowing two speakers
+    54.8 / 31.9 / 11.8 / 1.5   x1      a third answer
+
+**A coin flip.** There is no sense in which a thread count is correct: 1 and 6
+won the toss on this recording and 5 lost it. Every thread count from 1 to 8
+produces a different embedding hash -- there is no even/odd structure, no
+grouping, nothing to pin.
+
+The defect is that `FastClustering` has merge decisions on this recording so
+finely balanced that the last decimal place decides them, and the outcome is
+then amplified into an entirely different set of speakers.
+
+### What this invalidates
+
+- **Section 9ae** attributes the instability to thread count. It is one of many
+  things that perturbs the input by 1e-7; any of them flips the result.
+- **Section 9ai's CAM++ result** (6/6 against TitaNet's 4/6 on operator-verified
+  clips) came from one clustering of each. At a ~50% flip rate some of that gap
+  may be luck. The direction may well be real; it was reported as settled and
+  it was not.
+- **Section 9aj's blind summary test is unaffected.** Both arms used the same
+  cached embeddings and therefore the same partition, so the 4.67-against-2.33
+  result is a clean comparison of word timings.
+
+### `FastClustering` is not stateless
+
+The first `cluster()` call in a process returns a different partition from every
+call after it, on identical input:
+
+    call 1: 38.7 / 30.1 / 24.6 / 6.6
+    calls 2-5: 59.9 / 24.6 / 8.4 / 7.1   (stable among themselves)
+
+Across *fresh processes* the first call is perfectly reproducible -- six
+processes, identical labels. The app is therefore safe: `diarize_worker` is a
+subprocess that clusters exactly once.
+
+`tools/diar_lab.py` was not. Its `sweep`, `table` and `pipeline` commands loop
+over many calls in one process, so every row after the first described a regime
+the app never enters. Two of the measurements reported earlier today came from
+it. Fixed by giving each clustering its own process.
+
+## 9at. Consensus does not help; a better embedder removes the problem
+
+Two candidate fixes for the coin flip in 9as, both measured with
+`tools/consensus_test.py` -- K clusterings under a 3e-07 perturbation, scored by
+pair-counting agreement, which needs no correspondence between labellings.
+
+### Consensus clustering: no
+
+Take the partition that agrees most with the other K-1. Four independent trials,
+K=11, TitaNet, `num_speakers: 4`:
+
+| trial | vote | consensus pick |
+|---|---|---|
+| 1 | 6/11 balanced, 4/11 merged, 1/11 other | balanced |
+| 2 | 8/11 merged, 3/11 balanced | merged |
+| 3 | 6/11 merged, 5/11 balanced | merged |
+| 4 | 6/11 merged, 5/11 balanced | merged |
+
+**The majority is itself a coin flip.** With the split near 50/50 no K converges;
+more sampling only picks the more likely of two arbitrary answers. Mean
+agreement 0.85-0.90 -- the partitions concur about most pairs and differ on a
+large minority, which is exactly what two near-equally-supported solutions look
+like.
+
+So the ambiguity is not noise to be averaged away. Under TitaNet, this recording
+genuinely has no well-defined four-way split.
+
+### A better embedder: yes, and it is not close
+
+The same test on CAM++ embeddings, same audio, same segmentation, same
+clustering code:
+
+| | TitaNet | CAM++ |
+|---|---|---|
+| `num_speakers: 4`, 4 trials x 11 | coin flip | **44/44 identical**, agreement 1.0000 |
+| auto, 2 trials x 7 | -- | **14/14 identical**, agreement 1.0000 |
+
+CAM++ separates these speakers well enough that there is no knife-edge to fall
+off, and its partition is four balanced speakers -- 30.4 / 25.2 / 24.6 / 19.8 --
+against the operator's account of four active participants.
+
+**This is the argument section 9ai should have made.** That one compared a
+single TitaNet clustering against a single CAM++ clustering on six verified
+clips and called 6/6 against 4/6 decisive. Given a ~50% flip rate, that gap was
+partly luck. Stability under perturbation is the property worth testing, because
+it says the solution is well-defined rather than that one draw happened to land
+well.
+
+### The tension to resolve
+
+The operator listened and judged TitaNet more accurate, and CAM++ was reverted
+on that basis. But that compared one TitaNet *draw* -- and there was a coin
+flip's chance it was the other partition. The judgement was sound about what was
+heard; it does not establish that TitaNet is better, because TitaNet has no
+stable answer to be better.
+
+CAM++ is reproducible, so it can be judged once and the verdict holds.
+
+## 9au. Never ask FastClustering for a count
+
+9as found the partition decided by a coin flip; 9at found consensus cannot fix
+it and CAM++ does not suffer from it. The cause is narrower than either:
+
+| path | TitaNet | CAM++ |
+|---|---|---|
+| `num_clusters=K` | **coin flip** | stable |
+| threshold (auto) | stable, 13/14 identical | stable, 14/14 |
+
+It is asking `FastClustering` for a **target count** that is unstable. Its
+threshold path is well behaved for both embedders. And the count path is the one
+CLAUDE.md section 13.4 calls "by far the most reliable", so the single most
+trusted input was running through the single least reliable code path.
+
+`merge_to_count` takes that step back: over-cluster on the stable threshold path,
+then merge centroids down to the requested count in numpy, where the arithmetic
+is ours and `argmin` breaks ties by lowest index the same way every run. It is
+`merge_close_clusters` with a count as the stopping condition instead of a
+distance, for the same reason -- a centroid averages hundreds of vectors and is
+far better conditioned than any one of them.
+
+Measured on TitaNet, 9 runs under the same 3e-07 perturbation:
+
+    before   38.7/30.1/24.6/6.6  or  59.9/24.6/8.4/7.1   -- a coin flip
+    after    8/9  32.6/27.8/27.0/12.6
+             1/9  32.8/27.8/26.9/12.5   -- the same partition, a few segments moved
+
+### It also fixes the errors found by ear
+
+Against the six clips the operator verified (9ai), TitaNet through the new path:
+
+| clip | truth | old TitaNet | new path |
+|---|---|---|---|
+| 00:23:50 | spk 02 | S3 **wrong** | S1 (96%) |
+| 01:18:04 | spk 02 | S3 **wrong** | S1 (100%) |
+| 00:17:13 | spk 02 | S2 right | S1 (100%) |
+| 00:53:22 | spk 02 | S2 right | S1 (100%) |
+| 01:44:41 | spk 02 | S2 right | S1 (100%) |
+| 01:14:50 | spk 03 | S3 right | S2 (100%) |
+
+**6/6**, with the shipped embedder. Share 30.3 / 11.5 / 28.7 / 29.5 -- four
+speakers, no cluster swallowing the meeting.
+
+CAM++ is therefore no longer needed to get a stable answer, though it remains
+independently stable and is still selectable through
+`diarization.embedding_model`.
+
+### Confirmed on a second recording
+
+The 3h25m council meeting -- clean audio, the one sections 9e and 9 tuned the
+snap window and the 0.35 centroid threshold against -- is unstable too, just
+less obviously:
+
+| | old path | new path |
+|---|---|---|
+| 2h12m cross-talk | two partitions, ~50/50 | same partition, +/-0.2% |
+| council 3h25m | two partitions, ~70/30 | same partition, +/-0.1% |
+
+So this is not a property of difficult audio. A clean recording flips as well;
+it simply flips less often, so nobody noticed.
+
+**Which casts a shadow on how several constants here were tuned.** The snap
+window of 6 (9e), `merge_centroid_distance` of 0.35 (section 9), the threshold
+sweep in 7a -- each was measured on outcomes from that recording, on top of one
+draw from a distribution that had two. The snap measurements used a fixed
+transcript and are probably unaffected; the clustering ones may not be.
+`tools/consensus_test.py` is the way to check any of them.
+
+**Evidence limits.** Two recordings, nine perturbation trials each, six
+ground-truth points on one of them.

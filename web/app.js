@@ -65,6 +65,7 @@
         }
         $("boot-bar").style.width = "100%";
         show("connecting", false);
+        initComponents();
         loadModels();
         reattach();
       })
@@ -169,19 +170,23 @@
 
   // The dropdown defaults to whatever this card can actually hold, but the
   // choice is the user's: they may know something the detection does not.
-  function loadModels() {
+  // Kept out of loadModels: that runs again after a download finishes, and
+  // registering the click handler twice would fire two fetches per press.
+  function initComponents() {
     // A model this version wants that this install does not have. The updater
     // cannot fix this for anyone upgrading from before it existed -- the update
     // is performed by the *old* version's code -- so the new version has to ask
     // for itself. One button; nothing is fetched without a press.
-    checkComponents();
     $("component-get").addEventListener("click", function () {
       $("component-get").disabled = true;
       fetch("/api/components/fetch", { method: "POST" })
         .then(function () { pollComponents(); })
         .catch(function () { $("component-get").disabled = false; });
     });
+    checkComponents();
+  }
 
+  function loadModels() {
     fetch("/api/models")
       .then(function (r) { return r.json(); })
       .then(function (d) {
@@ -363,6 +368,11 @@
           } else if (p.phase === "idle" && p.total === 0) {
             clearInterval(components.timer); components.timer = null;
             $("component-notice").hidden = true;
+            // The dropdown was built when the page loaded, with the new model
+            // marked "not downloaded" and disabled. It is downloaded now, so
+            // rebuild it rather than making the user press F5 to discover
+            // that the thing they just waited for is selectable.
+            loadModels();
           }
         })
         .catch(function () { /* transient */ });

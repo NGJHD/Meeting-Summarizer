@@ -38,6 +38,10 @@ tools/*
 # torch install the app does not have -- so the recipe has to be in the repo
 # for the same reason the release scripts are.
 !tools/export_align_onnx.py
+# The measurements in BUILD_NOTES 9as-9au are only checkable if the tools that
+# made them are here, and 9au explicitly needs re-running on other recordings.
+!tools/cluster_once.py
+!tools/consensus_test.py
 work/
 
 # A note to whoever is cutting the release, not part of the app.
