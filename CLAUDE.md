@@ -309,7 +309,7 @@ operator edits this file in Notepad; the end user never sees it.
   },
   "diarization": {
     "enabled": true,
-    "threads": 5,
+    "threads": "auto",
     "num_speakers": 0,
     "cluster_threshold": 0.7,
     "min_duration_on": 0.3,
@@ -341,7 +341,8 @@ the operator sets it explicitly.
 Everything marked `"auto"` is **detected per machine, not guessed**, and an explicit value
 always wins: `llm.model` picks the quantisation this card can hold (§13.3),
 `llm.gpu_layers` and `llm.cpu_ffn_regex` decide where the weights live (§11.1),
-`llm.threads` omits the flag so llama.cpp uses the physical core count, and `gpu.backend`
+`llm.threads` omits the flag so llama.cpp uses the physical core count,
+`diarization.threads` takes half the logical cores within [5, 12] (§7), and `gpu.backend`
 chooses CUDA, Vulkan or CPU per engine (§2.1).
 
 `llm.external` is the one block the UI writes to (§13.3): the Model dropdown sets it
@@ -1349,11 +1350,12 @@ The build is done when all of these pass:
 12. Setting `pipeline.concurrent_diarization: false` produces the same merged transcript
     as the concurrent path on the same input.
 
-    **Caveat found in practice:** identical settings do *not* guarantee an identical
-    partition. Embedding under a different `diarization.threads` perturbs the vectors
-    enough to flip a borderline clustering — the same audio at 5 and 6 threads gave
-    materially different speaker shares (`BUILD_NOTES.md` §9ae). Compare the transcript
-    text and turn boundaries, not the speaker numbering.
+    This used to fail for a reason that had nothing to do with the two paths: a
+    different `diarization.threads` perturbed the embeddings by 3.5e-07 and re-rolled
+    the speakers entirely. Fixed in §8.1, and worth re-checking here — 1, 5, 8 and 12
+    threads now give byte-identical partitions (`BUILD_NOTES.md` §9av). If this test
+    ever fails again, compare the partitions before assuming the concurrency is at
+    fault.
 13. Killing the diarization process mid-run does not abort transcription; the job finishes
     with unattributed output.
 14. Names, figures and dates in the output match the transcript. Spot-check ten.

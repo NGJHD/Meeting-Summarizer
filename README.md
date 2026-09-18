@@ -69,6 +69,10 @@ Otherwise it would be the Qwen3.8-27B-UD-IQ3_XXS.gguf.
 
 If no discrete GPU is detected, CPU will be used instead of the iGPU.
 
+Speaker diarization sizes its thread count to the processor as well — half the logical
+cores, within sensible bounds. It is the longest stage of a run, and on a 12-core machine
+that is worth about 20% off it.
+
 All of this is detected at startup; there is nothing to configure. `bin\` carries one
 folder per backend and the right pair is chosen per engine.
 
