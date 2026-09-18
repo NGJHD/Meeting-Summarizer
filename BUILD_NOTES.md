@@ -2261,6 +2261,9 @@ A release therefore carries two zips, built by `tools/make_release.py`:
   the three large models remain to download.
 - `Meeting-Summariser-vX.Y.Z.zip` (~190 KB) -- the update payload.
 
+*(The full zip is ~1.47 GB from 1.2.0 onwards: the word aligner joined the bundle. See
+section 9aj. The figures above are what was measured at the time.)*
+
 ### The updater must never take the full one
 
 Two reasons, and the second is the real one:
@@ -2664,3 +2667,412 @@ High Quality ran. It now takes the tier from the model's own label.
   An OpenAI-compatible server without those needs a fallback that does not exist.
 - Final unzipped folder size is now **~17 GB** (14.3 GB model, 1.8 GB binaries, 253 MB
   runtime). `tools\` adds 180 MB and should be deleted before shipping.
+
+## 9ab. The participant count was being silently overridden
+
+Reported from a real 2h12m five-person meeting with heavy cross-talk: diarization
+produced three speakers. The operator had entered 5 in the UI.
+
+CLAUDE.md section 13.4 calls the participant count "by far the most reliable path",
+and section 8.1 says distance thresholding is skipped entirely when it is supplied.
+Both were true of the clusterer. Neither was true of what happened afterwards.
+
+`diarize_worker.main` runs `cluster -> prune -> merge_close_clusters`, and the merge
+ran unconditionally. Measured from the embedding cache for that recording:
+
+| `num_speakers` | after cluster | after prune | after merge |
+|---|---|---|---|
+| auto | 536 | 20 | 4 |
+| **5** | **5** | **5** | **3** |
+
+So the count was honoured and then thrown away two lines later. The fix is one
+condition: skip the merge when an explicit count was given. There is no
+fragmentation to repair when the clusterer was told the answer, so the merge can
+only destroy it.
+
+### Why 0.35 was safe there and not here
+
+Section 9 chose `merge_centroid_distance: 0.35` because on the 3h25m council
+recording the 190 centroid pairs "split into six at 0.03-0.15 and nothing else
+below 0.57". That gap is the entire justification, and it is a property of the
+recording, not of the constant. Both caches, same code path:
+
+| | widest gap in 0.05-0.70 | pairs within +/-0.05 of 0.35 |
+|---|---|---|
+| council 3h25m | **0.416** (0.150 -> 0.566) | 0 |
+| this meeting | **0.027** | 12 |
+
+Cross-talk is what closes the gap: two voices inside one embedding window produce a
+contaminated vector, and enough of them smear the centroids into a continuum. The
+merge is greedy and recomputes centroids after each step, so folding two different
+people together creates a hybrid that then attracts more -- which is the 20 -> 4
+cascade above.
+
+**The auto path is still not fixed by this, and cannot be.** Declining to merge
+leaves 20 clusters, which section 8.1 rightly calls worse than no labels at all.
+Automatic counting genuinely cannot resolve a recording with this much overlap.
+That is what the participant count is for, and it now works.
+
+### Ask for active speakers, not people in the room
+
+The operator reported five people: four active, and one who spoke for under a
+minute. Entering 5 is worse than entering 4, because the fifth is below what
+clustering can resolve and the clusterer splits an active speaker to reach the
+count. Per-speaker minutes from the same cache:
+
+    n=4   39.9  32.1  29.8   7.3
+    n=5   34.0  32.1  29.5   7.5  6.0     <- the 39.9 split, she was not found
+    n=6   34.2  29.4  28.3   7.6  6.0  3.5
+
+The smallest cluster at n=6 is 3.5 minutes, so a sub-minute participant is not
+recoverable at any setting. Section 13.4's wording should ask how many people spoke
+*substantially*, or the honest answer costs the user a real speaker.
+
+## 9ac. The embedding cache missed on path form
+
+Re-running the same recording through the app after building a cache by hand
+re-ran the 22-minute embedding pass. `cache_key` hashes the *strings* in
+`diarize_params.json`, and the app writes resolved absolute paths where a
+hand-run passes the relative ones out of `config.json`. Same file, same bytes,
+different hash.
+
+It never affects a production run -- nobody processes the same audio twice -- but
+it defeats exactly the workflow section 3.7a exists for, where the whole point is
+that re-clustering costs seconds. The paths are resolved before hashing now, so
+both forms agree.
+
+## 9ad. Whisper's DTW word ends, and the silent voice sample
+
+Reported: the clips in the speaker-naming panel do not match their text. One was
+18 seconds of audio containing the single word "so".
+
+The word *starts* are sound. The ends are not. Measured over the 2h12m meeting:
+
+| | |
+|---|---|
+| consecutive word pairs that overlap | **32.5%** (median depth 0.12 s) |
+| words claiming over 2 s | 4.8% |
+| longest single word | **43.1 s** |
+| midpoints landing past the next word's start | 10.9% |
+
+### It does not move attribution
+
+The obvious worry is section 9 step 2, which assigns each word by its midpoint.
+Clamping every end to the next word's start and re-running the merge:
+
+    as shipped     1159 changes, 46.5% clean
+    ends clamped   1190 changes, 45.8% clean
+
+Nothing, or slightly worse. The diarization segments are long next to a 0.12 s
+overlap. **So the shipped attribution path is left alone** -- and note that
+clamping to the next start is the wrong repair anyway, because it forces every
+inter-word gap to zero and destroys the signal turn grouping runs on.
+
+### What it does wreck is turn grouping
+
+`merge.assign_speakers` breaks a turn on
+`word.start - previous.end > TURN_GAP_S` (2 s). One inflated end swallows the
+silence behind it, so a turn spans a gap it should have broken on -- in the
+reported case a 17-second one, from a turn whose first word sat alone at
+1810.7 s with the next at 1827.8 s. `speakers.build_samples` cuts its clip from
+the turn's start, so the clip was that one word and then silence.
+
+Capping word *duration* fixes it where clamping did not:
+
+| cap | turns | clean | turns > 25 s | sparse-long turns |
+|---|---|---|---|---|
+| none | 909 | 46.5% | 59 | **10** |
+| 3.0 s | 1020 | 46.6% | 32 | **0** |
+| 2.0 s | 1053 | 46.7% | 31 | 0 |
+| 1.0 s | 1118 | 46.7% | 21 | 0 |
+
+**3.0 s adopted** (`transcribe.MAX_WORD_S`), applied in `parse_json` so
+everything downstream inherits it. The 90th-percentile word is 1.15 s, so it
+truncates only degenerate ends and leaves real words alone. Attribution is
+unchanged, which is the point -- this is a turn-grouping fix, not an
+attribution one.
+
+### Two further sample defects, same report
+
+- **Ranked by the wrong thing.** `build_samples` sorted by wall-clock span, so
+  it preferentially picked the turns with the largest silences in them. It now
+  ranks by speech actually inside the clip window, unioning the word intervals
+  rather than summing them -- summing overlapping ends reported 175 s of speech
+  inside an 18-second clip.
+- **The text ran past the audio.** The clip is capped at `MAX_CLIP_S` (18 s)
+  while the caption showed 400 characters of the whole turn, so on any long turn
+  the reader saw far more than they heard. The caption is now cut to the words
+  the clip contains.
+
+## 9ae. The partition is not stable, and TitaNet may have it wrong here
+
+With `num_speakers: 4` the same audio gave materially different splits between a
+lab run (threads 6, share 28.9/32.6/5.3/33.2) and the production run (threads 5,
+share 31.0/8.7/5.9/54.4). Same model, same threshold, same count. Embedding under
+a different thread count perturbs the vectors enough to flip a borderline
+clustering, so **the diarization result is not reproducible across
+`diarization.threads`** -- worth knowing before trusting any single partition,
+and a caveat on acceptance test 12.
+
+The operator reports the production labels are wrong in a specific way: 01 and 02
+are one person, and 03 is two. That implies a true share near 31/15/27/27.
+
+    TitaNet n=4   28.9 / 32.6 /  5.3 / 33.2
+    CAM++   n=4   28.8 / 27.4 / 27.4 / 16.4
+
+Cross-tabulated per word, CAM++ pulls ~1200 words out of TitaNet's largest
+cluster into its own third one. That is the direction the operator describes, and
+the distribution is much the closer match -- but a distribution match is not an
+identity check, so this is **not** adopted. `output\_compare_CAMPLUS_transcript.md`
+is rendered for a listening check. Section 9's finding that CAM++ was no better
+stands only for the *automatic* path, where neither model produces a usable
+centroid gap (0.026 vs 0.035).
+
+## 9af. wav2vec2 forced alignment measured end to end -- not adopted
+
+`whisper.align_cmd` (empty by default) runs an out-of-process forced aligner
+after transcription and replaces the word timings. The only implementation is a
+torch venv outside the app, which constraint 3 forbids shipping; it exists to
+decide whether an onnxruntime port is worth building. Any failure keeps the DTW
+words, because a timing experiment must not fail a job that has already paid for
+transcription.
+
+Full 2h12m run, same audio, same embeddings, same clusters -- only the timing
+method differs:
+
+| | DTW (capped) | wav2vec2 |
+|---|---|---|
+| words aligned | -- | 15550 / 15550 (100%) |
+| overlapping consecutive pairs | 32.5% | **0.2%** |
+| turns | 1020 | 1106 |
+| speaker changes | 904 | 916 |
+| changes starting a sentence | 51.1% | **52.8%** |
+| turns of 5 words or fewer | 31.1% | 31.9% |
+| alignment cost | 0 | **362 s** (CPU) |
+
+The timestamps really are far better. The transcript is **1.7 points** better on
+the only quality measure available, against 5 points on a 10-minute slice --
+the gain shrinks with length. Turn boundaries move in both directions: a long
+turn now splits correctly on a real pause at 00:00:43, while "I think" is split
+off from its own sentence elsewhere.
+
+**The speaker partition is untouched** (28.9/32.6/5.3/33.2 against
+28.7/32.5/5.4/33.3). It cannot be otherwise -- alignment does not see speaker
+identity -- so this does nothing for the failure the operator actually reported,
+which is two clusters being one person and one cluster being two.
+
+**Not adopted.** 1.7 points does not buy torch, ~3 GB of wheels (CPU-only from
+PyPI on Windows), a runtime model download and 6 minutes a run. Revisit only if
+the clustering is fixed first and boundary precision becomes the limit.
+
+### Two things the run established regardless
+
+- **Editing `server/*.py` while uvicorn is running changes nothing.** Modules
+  import once. `diarize_worker.py` is the exception -- a subprocess, re-imported
+  per job -- which is why a fix to it appeared to work while four other files
+  silently did not. A whole run was wasted on this.
+- **The large external context does not reduce map calls.** `chunker.py` only
+  shrinks `target_tokens` to fit a smaller window and never grows it, so a 2h12m
+  meeting is 4 x 10000 tokens at 81920 exactly as at 32768. The 80k window buys
+  reduce headroom, nothing else.
+
+## 9ag. The summary is two sections, not six
+
+At the operator's request, `reduce_summary.txt` drops **Decisions and Outcomes**,
+**Points of Disagreement**, **Unresolved Questions** and **Participants**,
+leaving Executive Summary and Key Themes. This is a deliberate deviation from
+CLAUDE.md section 12, which specifies all six.
+
+The reasoning is that it removes a duplication rather than information. In
+`both` mode -- the default -- minutes already carry Decisions, Action Items,
+Open Questions, Participants and Attribution Notes, in the terse scannable form
+that suits a record. Repeating them as prose in the summary asked the reader to
+read the same material twice in two registers. Key Themes is now told
+explicitly to carry what was settled, where people differed and what was left
+open, inside the theme each arose in, so nothing is dropped -- it moves from a
+section of its own into the narrative.
+
+**Known consequence:** a `summary`-only run now has no speaker-label key
+anywhere, because Participants was the only place the labels were enumerated.
+Renaming is unaffected (it substitutes labels wherever they appear, and they
+still appear inline). The six-section original is in git:
+`git show <pre-1.2.0-commit>:prompts/reduce_summary.txt`.
+
+## 9ah. DTW against wav2vec2, matched full runs
+
+Both runs: same audio, same cached embeddings, same clusters, same external
+server on 9931, `num_speakers: 4`, `both` mode. Only the word timings differ.
+
+| | DTW | wav2vec2 |
+|---|---|---|
+| wall clock | **731 s** (10.8x realtime) | 1080 s (7.3x) |
+| alignment | -- | 362 s |
+| turns | 1020 | 1106 |
+| changes starting a sentence | 51.1% | **52.8%** |
+| turns of 5 words or fewer | **31.1%** | 31.9% |
+| word share | 28.9/32.6/5.3/33.2 | 28.7/32.5/5.4/33.3 |
+
+The share is identical to within 0.2 points, as it must be -- alignment cannot
+see speaker identity. Everything wav2vec2 changes is a boundary moving a word or
+two, and reading the divergences it goes both ways: it correctly splits a long
+turn on a real pause at 00:00:43, and it incorrectly splits "Maybe it can't" from
+"be." and breaks "check out" across two speakers. Confirms 9af: **not adopted.**
+
+### The documents vary far more than the timing method does
+
+| | DTW | wav2vec2 |
+|---|---|---|
+| summary words | 3215 | 3848 |
+| action items | 11 | 8 |
+| `(HH:MM:SS)` in minutes | **85** | **1** |
+
+The wav2vec2 run's minutes fell back to "(early §1)" and "(§3)" almost
+throughout, which section 12 requires to be real timestamps. The matched DTW run
+produced 85 of them from the same prompt, the same server and the same notes
+structure.
+
+**This is not attributed to the aligner.** The final reduce runs at
+`temperature: 1.0` (section 11.2) and this is one sample per arm. What it does
+establish, and what was not recorded anywhere before, is that **minutes output is
+high-variance run to run** -- enough that a single run is not evidence about any
+change upstream of it. Any future comparison of document quality needs several
+runs per arm, or a lower temperature for the comparison.
+
+## 9ai. Ground truth from the operator: CAM++ 6/6, TitaNet 4/6
+
+The operator listened to the voice samples from two runs and identified two
+clips as the wrong speaker. Both are the same failure: cluster 03 swallowing
+speaker 02. Majority vote over each clip's window, same audio and segmentation,
+`num_speakers: 4`:
+
+| clip | truth | TitaNet | CAM++ |
+|---|---|---|---|
+| 00:23:50 | spk 02 | S3 (100%) **wrong** | S2 (95%) right |
+| 01:18:04 | spk 02 | S3 (100%) **wrong** | S2 (100%) right |
+| 00:17:13 | spk 02 | S2 right | S2 right |
+| 00:53:22 | spk 02 | S2 right | S2 right |
+| 01:44:41 | spk 02 | S2 right | S2 right |
+| 01:14:50 | spk 03 | S3 right | S1 right |
+
+**TitaNet 4/6, CAM++ 6/6.** CAM++ fixes both errors and matches TitaNet
+everywhere TitaNet was right. Taken with the distribution argument in 9ae, and
+with CAM++ being trained Chinese-English against TitaNet's English-only on a
+Singlish recording, this is now the best-supported change available and it costs
+no new dependency -- `diarization.embedding_model` selects it, and the
+thresholds are bypassed when a count is supplied.
+
+### The voice samples, and a fix that was reverted
+
+The operator also reports the DTW run's clips contain heavy cross-talk while the
+wav2vec2 run's are clean. The two runs pick almost entirely different clips (one
+of twelve in common), because clip ranking scores speech density from word
+intervals and DTW's inflated overlapping ends make two people at once look like
+one dense speaker.
+
+A penalty was written for this, scoring candidate windows by diarization overlap
+with other speakers -- and **reverted**, because it cannot be shown to work:
+
+- Measured other-speaker *words* inside each clip window: **0.00 s for both
+  runs**. During cross-talk whisper transcribes one voice, so the second speaker
+  leaves no words to count. The transcript cannot see what the operator hears.
+- Measured diarization *overlap*: 0.0-0.6 s in an 18 s clip, noise-level, and it
+  still moved two of four clips. Where the overlap is between two people inside
+  one cluster -- which is exactly the 03-swallows-02 failure above -- it is
+  same-label and invisible to the measure anyway.
+
+So this stays an open problem with no cheap fix. It does revise 9af's verdict in
+one respect: wav2vec2's real benefit here is **sample quality**, not transcript
+accuracy, and that is a user-facing feature (section 13.9 -- hearing a voice is
+how you identify someone). Still not adoptable at the cost of torch, but it
+strengthens the case for an onnxruntime aligner if this ever gets revisited.
+
+## 9aj. Forced alignment, measured then built
+
+### The blind test that justified it
+
+Six summaries, three per arm, from the *cached notes* of two finished runs of
+the same meeting -- so nothing was re-transcribed and the only difference
+between arms was which transcript produced the notes. Shuffled, unlabelled,
+rated by the operator out of 5:
+
+| | scores | mean |
+|---|---|---|
+| DTW timings | 2, 3, 2 | 2.33 |
+| wav2vec2 timings | 5, 4, 5 | **4.67** |
+
+No overlap between arms. With 3 against 3 that is p = 1/20 = 0.05, the strongest
+result the sample size allows.
+
+**The prediction this overturned was mine.** I argued alignment could not affect
+the summary because all three runs share an identical 15550 words. True, and
+beside the point: the map stage does not read words, it reads
+*speaker-attributed turns*, and turn boundaries are computed from the timings.
+Section 8 says diarization "gives the model dialogue structure to reason over";
+that structure is exactly what better timings improve. The words being identical
+is what makes the result clean -- nothing varied but structure.
+
+### What shipped
+
+`server/align.py`, under onnxruntime, no torch:
+
+    emissions -> trellis -> Viterbi backtrace -> character spans -> word spans
+
+torchaudio's algorithm reimplemented in numpy. `models/wav2vec2-align.onnx` is
+WAV2VEC2_ASR_BASE_960H exported once by `tools/export_align_onnx.py`. torchaudio
+publishes no .onnx, so like the Vulkan whisper build (section 2.1) it is ours to
+distribute -- but unlike that one it **travels in the full zip**: 360 MB raw
+deflates to 220 MB, taking the bundle from 1.24 GB to 1.47 GB, still clear of
+GitHub's 2 GB per-asset limit. A first install therefore has it without a
+further download.
+
+`DOWNLOAD_MODELS.bat` fetches it too, for an install made from the source zip,
+but through a new `:get_optional` -- a failure there prints a line and carries
+on instead of setting `FAILED`. The app runs without the model; telling someone
+their install is broken because an optional file did not arrive would be false.
+(`:get_optional` saves and restores `FAILED` rather than clearing it, so it
+cannot erase an earlier real failure.)
+
+Validated word for word against the torch implementation over the same
+recording -- the same algorithm on the same audio, so this is a regression test
+rather than an eyeball (`tools/align_check.py`):
+
+| | |
+|---|---|
+| words aligned | 15468 of 15550 (99.5%) |
+| median delta vs torch | **0.000 s** |
+| within 0.10 s | 94.3% of starts |
+| wall clock | **274 s**, against torch's 362 s |
+
+The 0.5% it skips are digit-only words -- "20" has no character in an alphabet
+of 26 letters and an apostrophe. Those keep whisper's timings rather than being
+dropped, because the caller indexes positionally and a missing word would shift
+every speaker assignment after it.
+
+Downstream, which is the acceptance test that matters:
+
+| | turns | clean changes | overlapping word pairs |
+|---|---|---|---|
+| DTW | 1020 | 46.6% | **31.9%** |
+| torch align | 1106 | 47.9% | 0.2% |
+| **ONNX align** | 1114 | **47.3%** | **0.8%** |
+
+### int8 rejected
+
+Dynamic quantisation gives 90.8 MB against 360.3, and is worse on both axes:
+**5.7x slower** (240 s against 42 s on a 20-minute slice) and less accurate
+(clean changes 39.5% against 43.3%, only 20.4% of words within one frame of
+fp32). Presumably the conv stack falls off its fast kernels. fp32 ships.
+
+### Limits
+
+- **English only.** The label set is 26 letters and an apostrophe. Any other
+  `whisper.language` skips the stage and logs it -- the failure mode otherwise
+  is not an error but confident nonsense, aligning to the wrong phonemes.
+- **Not required.** Absent from `config.REQUIRED_FILES`: without the model the
+  pipeline runs on whisper's DTW timings exactly as before.
+- **Never fatal.** Every failure path -- missing model, bad segment, exception,
+  cancellation -- returns the DTW timings. It runs after transcription has been
+  paid for and must not be able to waste it.
+- It costs ~275 s of CPU on a 2h12m recording, after whisper has released the
+  GPU, so `align_threads` defaults to `whisper.threads` and section 7's thread
+  budget is preserved.

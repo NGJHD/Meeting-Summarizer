@@ -32,13 +32,43 @@ PLACEHOLDER = "_(This section of the recording could not be summarised.)_"
 # correct conservative behaviour there (BUILD_NOTES section 9x).
 REDUCE_MAX_TOKENS = 12000
 
+# The ceiling for a server we did not start. 12000 is only safe because we pass
+# --reasoning-budget 4000 to our own, so thinking cannot eat more than a third
+# of it. On an external server we cannot set that flag and there is no
+# per-request equivalent (section 11.2), so a model left on its default
+# unlimited budget can spend the entire allowance reasoning and return
+# finish_reason=length with empty content. The retry degrades to thinking-off
+# and still produces a document, but only after throwing a full generation
+# away -- seven minutes at a measured 28 tok/s.
+#
+# So where the attached server has the context to spare, give the reduce room
+# for a long think *and* a whole document rather than making them compete. The
+# cap is not the context: an unbounded think against an 80k window would
+# generate for an hour before anyone found out.
+REDUCE_MAX_TOKENS_EXTERNAL = 24000
 
-def _guard(job: Job, server: llm.LlamaServer, prompt: str, max_out: int, cfg: dict) -> int:
+
+def _final_max_tokens(server: llm.LlamaServer, prompt_tokens: int) -> int:
+    """The final reduce's output allowance, which thinking shares.
+
+    Unchanged at REDUCE_MAX_TOKENS on our own server: we set the thinking
+    budget there, and 12000 is measured-sufficient (BUILD_NOTES section 9x).
+    On an external one we control neither, so spend spare context on headroom.
+    """
+    if not server.external:
+        return REDUCE_MAX_TOKENS
+    room = server.ctx_size - prompt_tokens - 2000      # what chunker.fits allows
+    return max(REDUCE_MAX_TOKENS, min(REDUCE_MAX_TOKENS_EXTERNAL, room))
+
+
+def _guard(job: Job, server: llm.LlamaServer, prompt: str, max_out: int, cfg: dict,
+           n: int | None = None) -> int:
     """Return the prompt's token count, refusing to send one that will not fit."""
     # The server's context, not ours: with the Port option it was started by
     # somebody else and may be smaller (see llm.LlamaServer.ctx_size).
     ctx = server.ctx_size
-    n = server.token_count(prompt)
+    if n is None:
+        n = server.token_count(prompt)
     if not chunker.fits(n, max_out, ctx):
         # Name the real cause. On our own server this genuinely is a recording
         # too large to consolidate; on a server somebody else started with a
@@ -235,8 +265,11 @@ def run_final_reduce(
         meeting_name=meeting_name,
         duration=merge.hms(duration_s),
     )
-    n = _guard(job, server, prompt, max_out, cfg)
-    job.log("reduce: %d prompt tokens, thinking=%s effort=%s" % (n, think, effort))
+    n = server.token_count(prompt)
+    max_out = _final_max_tokens(server, n)
+    _guard(job, server, prompt, max_out, cfg, n=n)
+    job.log("reduce: %d prompt tokens, max_tokens=%d, thinking=%s effort=%s"
+            % (n, max_out, think, effort))
     def within(frac: float) -> None:
         job.set_progress("reduce", (index + frac) / total)
 

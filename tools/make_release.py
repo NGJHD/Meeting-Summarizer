@@ -5,7 +5,7 @@ r"""Build the two release assets. Development only; not shipped.
 A release carries two zips and they are not variants of the same thing:
 
   Meeting-Summariser-vX.Y.Z.zip        the source tree, ~190 KB
-  Meeting-Summariser-vX.Y.Z-full.zip   the same plus runtime\, bin\ and the small models, ~1.24 GB
+  Meeting-Summariser-vX.Y.Z-full.zip   the same plus runtime\, bin\ and the small models, ~1.47 GB
 
 The small one is the **update payload** -- what the in-app updater downloads and
 robocopies over an install. It must stay small and must never contain
@@ -37,18 +37,26 @@ PREFIX = "Meeting-Summariser"
 BUNDLED_DIRS = ("runtime", "bin")
 
 # The models small enough to travel, named individually -- `models\` as a whole
-# is 25 GB. Together these are 103 MB and they carry their weight twice over:
-# they are also the only two downloads that were never pinned to immutable
-# bytes (sherpa-onnx publishes them on floating release tags), and the
-# segmentation one arrives as a tar.bz2 that has to be unpacked and renamed.
-# Shipping them retires the most fragile step in DOWNLOAD_MODELS.bat.
+# is 25 GB. The first three are 103 MB and they carry their weight twice over:
+# they are also the only downloads that were never pinned to immutable bytes
+# (sherpa-onnx publishes them on floating release tags), and the segmentation
+# one arrives as a tar.bz2 that has to be unpacked and renamed. Shipping them
+# retires the most fragile step in DOWNLOAD_MODELS.bat.
+#
+# The aligner is 360 MB raw but deflates to 220 MB, taking the bundle from
+# 1.24 GB to about 1.47 GB -- still clear of GitHub's 2 GB per-asset limit.
+# It is worth the space: it is exported by us from torchaudio (no .onnx is
+# published anywhere), so the alternative is self-hosting it as yet another
+# release asset that a first install has to fetch separately.
 #
 # Whisper large-v3-turbo is deliberately not here. It compresses to 1.42 GB,
-# which would take the bundle to 2.56 GB against GitHub's 2 GB per-asset limit.
+# which would take the bundle past the limit.
 BUNDLED_FILES = (
     "models/ggml-silero-v5.1.2.bin",
     "models/segmentation-3.0.onnx",
     "models/speaker-embedding.onnx",
+    "models/wav2vec2-align.onnx",
+    "models/wav2vec2-align.json",
 )
 SKIP_PARTS = {"__pycache__"}
 # This script is tracked so that a release is reproducible from the repository,

@@ -87,8 +87,19 @@ def cache_key(wav: Path, params: dict) -> str:
         if size > (2 << 20):
             fh.seek(-(1 << 20), 2)
             h.update(fh.read(1 << 20))
-    for k in ("segmentation_model", "embedding_model", "min_embed_duration"):
-        h.update(str(params.get(k)).encode())
+    # Resolve the model paths before hashing them. The app passes absolute
+    # paths and a hand-run of this worker usually passes the relative ones from
+    # config.json; hashing the raw strings makes those two miss each other's
+    # cache, so the cheap re-clustering that section 3.7a exists to provide
+    # silently costs a 22-minute embedding pass instead.
+    for k in ("segmentation_model", "embedding_model"):
+        v = params.get(k)
+        try:
+            v = str(Path(str(v)).resolve())
+        except OSError:
+            v = str(v)
+        h.update(v.encode())
+    h.update(str(params.get("min_embed_duration")).encode())
     return h.hexdigest()[:16]
 
 
@@ -619,10 +630,23 @@ def main(argv: list[str]) -> int:
 
         total_speech_s = float(weights.sum()) / seg_m.sample_rate
         assignment, stats, coverage = prune(raw, embeddings, weights, params, total_speech_s)
-        assignment, merges = merge_close_clusters(
-            assignment, embeddings, weights,
-            float(params.get("merge_centroid_distance", 0.35)),
-        )
+
+        # Centroid merging exists to repair the over-fragmentation that
+        # *automatic* thresholding produces. When the user has told us how many
+        # people spoke, the clusterer was given that count and there is no
+        # fragmentation to repair -- so merging can only destroy the answer we
+        # were handed. Measured on a 2h12m five-speaker meeting with heavy
+        # cross-talk: num_speakers=5 clustered to exactly 5, and the merge then
+        # collapsed them to 3, silently overriding the one input CLAUDE.md
+        # section 13.4 calls the most reliable path there is.
+        explicit = int(params.get("num_speakers", 0)) > 0
+        if explicit:
+            merges = 0
+        else:
+            assignment, merges = merge_close_clusters(
+                assignment, embeddings, weights,
+                float(params.get("merge_centroid_distance", 0.35)),
+            )
         stats["centroid_merges"] = merges
         stats["clusters_kept"] = len(set(int(c) for c in assignment if c >= 0))
 

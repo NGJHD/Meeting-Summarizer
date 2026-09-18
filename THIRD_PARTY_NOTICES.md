@@ -75,9 +75,19 @@ Marked **(shipped)** where the file is inside the `-full` zip rather than downlo
 | [Silero VAD v5.1.2](https://huggingface.co/ggml-org/whisper-vad) (ggml) **(shipped)** | Speech detection | MIT |
 | [pyannote segmentation-3.0](https://huggingface.co/pyannote/segmentation-3.0) (ONNX re-export) **(shipped)** | Speaker segmentation | MIT |
 | [NVIDIA TitaNet-Large](https://huggingface.co/nvidia/speakerverification_en_titanet_large) (ONNX re-export) **(shipped)** | Speaker embedding | **CC-BY-4.0** |
+| [wav2vec 2.0 Base 960h](https://github.com/facebookresearch/fairseq/tree/main/examples/wav2vec) (ONNX export, ours) **(shipped)** | Word-level forced alignment | MIT |
 | [Qwen3.8-27B](https://huggingface.co/unsloth/Qwen3.8-27B-GGUF) — UD-IQ4_XS and IQ3_XXS | Summaries and minutes | Apache-2.0 |
 
 The ONNX re-exports of the two speaker models are distributed by the sherpa-onnx project.
+
+The alignment model is **our own export**, not a redistribution of somebody else's file:
+torchaudio publishes `WAV2VEC2_ASR_BASE_960H` as PyTorch weights and no ONNX exists, so
+`tools/export_align_onnx.py` converts it once and the result is hosted on this
+repository's releases. The weights are unchanged. torchaudio states it was *"originally
+published by the authors of wav2vec 2.0 under MIT License and redistributed with the same
+license"*, so the export carries the same MIT terms —
+[fairseq LICENSE](https://github.com/facebookresearch/fairseq/blob/main/LICENSE),
+copyright Facebook, Inc. and its affiliates.
 
 **CC-BY-4.0 is the one with a positive obligation:** TitaNet-Large requires attribution to
 NVIDIA. This file satisfies it, so keep it with the folder.

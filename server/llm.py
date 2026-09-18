@@ -44,7 +44,9 @@ _OPEN_THINK_RE = re.compile(r"^.*?</think>", re.DOTALL)
 # The chat template raises a Jinja exception - surfacing as HTTP 500 - for any
 # effort outside this set, and silently rewrites "high" to "xhigh"
 # (BUILD_NOTES.md section 5). Validate before dispatch rather than after.
-VALID_EFFORT = {"xhigh", "medium", "low"}
+# Qwen3.8 accepts xhigh / medium / low / none (Unsloth's published set).
+# Anything else falls back to medium, so an unrecognised value is never sent.
+VALID_EFFORT = {"xhigh", "medium", "low", "none"}
 
 # How long to wait for a server we did not start. See LlamaServer.attach.
 ATTACH_TIMEOUT_S = 10.0
@@ -663,7 +665,7 @@ class LlamaServer:
             kwargs["reasoning_effort"] = effort
         else:
             sampling = {
-                "temperature": 0.7, "top_p": 0.8, "top_k": 20,
+                "temperature": 0.7, "top_p": 0.8, "top_k": 20, "min_p": 0.0,
                 "presence_penalty": 1.5, "repeat_penalty": 1.0,
             }
             kwargs = {"enable_thinking": False}

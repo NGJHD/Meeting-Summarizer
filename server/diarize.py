@@ -46,7 +46,15 @@ def run(job: Job, cfg: dict, wav: Path) -> list[Turn]:
         return []
 
     seg_path = config.MODELS / SEGMENTATION_MODEL
-    emb_path = config.MODELS / EMBEDDING_MODEL
+    # The embedding model is selectable so alternatives can be measured against
+    # a real recording without swapping files about. TitaNet-large ships
+    # (BUILD_NOTES 3.8); anything sherpa-onnx accepts works. Note that
+    # `cluster_threshold`, `merge_centroid_distance` and `reassign_max_distance`
+    # are all tuned to TitaNet's cosine scale and do NOT carry over -- with an
+    # explicit `num_speakers` the threshold is bypassed, which is the only
+    # configuration another model has been tested in.
+    emb_path = config.resolve(dcfg.get("embedding_model")
+                              or (config.MODELS / EMBEDDING_MODEL))
     for p in (seg_path, emb_path):
         if not p.exists():
             job.log("diarization: %s missing, continuing without speakers" % p.name)

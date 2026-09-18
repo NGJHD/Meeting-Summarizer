@@ -256,6 +256,13 @@ _DEFAULTS = {
         "threads": 5,
         "max_context": 0,
         "dtw": True,
+        # Forced alignment of the words to the audio, replacing whisper's DTW
+        # timings (BUILD_NOTES 9aj). Needs models/wav2vec2-align.onnx; without
+        # it the stage logs and skips. English only.
+        "align": True,
+        # 0 follows whisper.threads. Alignment runs on the CPU after whisper
+        # has released the GPU, so it may use more.
+        "align_threads": 0,
     },
     "estimate": {
         "transcript_tokens_per_audio_minute": 206,
@@ -277,6 +284,9 @@ _DEFAULTS = {
         "min_embed_duration": 1.0,
         "min_coverage_fraction": 0.80,
         "embedding_cache": True,
+        # Empty uses the shipped TitaNet-large. See diarize.run for the
+        # thresholds that do not carry across models.
+        "embedding_model": "",
     },
     "server": {"port": 8000},
 }

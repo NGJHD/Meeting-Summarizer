@@ -31,6 +31,10 @@ CREATE_NEW_PROCESS_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 _PROGRESS_RE = re.compile(r"progress\s*=\s*(\d+)%")
+# Mirrors merge._SENTENCE_END. Defined here too because importing merge
+# would be a cycle: merge imports this module for Word.
+SENTENCE_END = re.compile('[.!?]["\\\')\\]]*$')
+
 _VAD_SEG_RE = re.compile(
     r"vad_segment_info:\s*"
     r"orig_start:\s*(-?[\d.]+),\s*orig_end:\s*(-?[\d.]+),\s*"
@@ -188,6 +192,60 @@ def _build_command(cfg: dict, wav: Path, out_prefix: Path) -> list[str]:
     return cmd
 
 
+ALIGN_MODEL = "wav2vec2-align.onnx"
+
+
+def realign(job: Job, cfg: dict, wav: Path, words: list[Word]) -> list[Word]:
+    """Replace whisper's DTW word timings with forced alignment.
+
+    On by default (`whisper.align`). Whisper's DTW ends are unreliable -- 32.5%
+    of consecutive pairs overlapped on a measured recording, the worst word
+    claiming 43 seconds -- and the cost lands on turn grouping, which is what
+    the map stage reads. Measured blind over six summaries built from the same
+    notes, aligned timings scored 4.67 against 2.33 out of 5 (BUILD_NOTES 9aj).
+
+    Every failure path keeps the DTW timings. This runs after transcription has
+    already been paid for, so it must never be able to fail the job; a missing
+    model just means the timings stay the ones whisper gave us.
+    """
+    if not cfg["whisper"].get("align", True) or not words:
+        return words
+    # The shipped alignment model is English-only (torchaudio's
+    # WAV2VEC2_ASR_BASE_960H, a 26-letter alphabet). On another language it
+    # would not fail -- it would silently align to the wrong phonemes and
+    # return confident nonsense, which is worse than doing nothing.
+    language = str(cfg["whisper"].get("language", "en") or "en").lower()
+    if language not in ("en", "english"):
+        job.log("align: model is English-only, keeping whisper's timings "
+                "for language %r" % language)
+        return words
+    model = config.MODELS / ALIGN_MODEL
+    if not model.exists():
+        job.log("align: %s missing, keeping whisper's timings" % ALIGN_MODEL)
+        return words
+
+    from . import align as align_mod
+
+    try:
+        t0 = time.time()
+        job.log("align: re-timing %d words" % len(words))
+        threads = int(cfg["whisper"].get("align_threads")
+                      or cfg["whisper"].get("threads", 5))
+        timings, replaced = align_mod.align_words(
+            words, wav, model, lambda t: bool(SENTENCE_END.search(t)),
+            threads=threads, should_cancel=lambda: job.cancelled,
+        )
+    except Exception as exc:  # noqa: BLE001 - never fail a paid-for transcript
+        job.log("align: %s, keeping whisper's timings" % exc)
+        return words
+
+    if job.cancelled or replaced == 0:
+        return words
+    job.log("align: %d of %d words re-timed in %.0fs"
+            % (replaced, len(words), time.time() - t0))
+    return [Word(w.text, a, max(b, a)) for w, (a, b) in zip(words, timings)]
+
+
 def run(job: Job, cfg: dict, wav: Path) -> list[Word]:
     """Transcribe `wav` and return words on the original audio timeline."""
     job.check_cancelled()
@@ -248,6 +306,7 @@ def run(job: Job, cfg: dict, wav: Path) -> list[Word]:
         job.log("whisper: %d speech regions kept by VAD" % len(regions))
 
     words = parse_json(json_path, timeline)
+    words = realign(job, cfg, wav, words)
     if not words:
         raise JobError(
             "No speech was found in that recording.",
@@ -256,6 +315,30 @@ def run(job: Job, cfg: dict, wav: Path) -> list[Word]:
     job.log("whisper: %d words" % len(words))
     job.set_progress("transcribe", 1.0)
     return words
+
+
+# Whisper's DTW end offsets are unreliable in places: on a measured 2h12m
+# recording 32.5% of consecutive word pairs overlapped and 4.8% of words
+# claimed to last over two seconds, the worst of them 43. The starts stay
+# sound, so the damage is confined to the ends.
+#
+# It barely moves attribution -- the diarization segments are long next to a
+# 0.12s median overlap, and clamping changed clean speaker changes by 0.7
+# points. What it does wreck is turn grouping, which breaks on
+# `word.start - previous.end > TURN_GAP_S`: one inflated end swallows the
+# silence after it, so a turn spans a 17-second gap and the voice sample cut
+# from its start is almost entirely silence. That is what put a single word
+# into an 18-second clip in the speaker-naming panel.
+#
+# 3.0s is deliberately generous -- the 90th percentile word is 1.15s -- so it
+# leaves genuinely long words alone and only truncates the degenerate ones.
+MAX_WORD_S = 3.0
+
+
+def _cap_duration(w: Word) -> Word:
+    if w.end - w.start > MAX_WORD_S:
+        w.end = w.start + MAX_WORD_S
+    return w
 
 
 def parse_json(path: Path, timeline: Optional[VadTimeline] = None) -> list[Word]:
@@ -314,4 +397,4 @@ def parse_json(path: Path, timeline: Optional[VadTimeline] = None) -> list[Word]
         if current is not None and current.text:
             words.append(current)
 
-    return [w for w in words if w.text]
+    return [_cap_duration(w) for w in words if w.text]

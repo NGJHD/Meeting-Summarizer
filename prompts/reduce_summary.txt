@@ -30,22 +30,11 @@ The substance of the meeting, organised by topic. Flowing prose under short topi
 sub-headings (###). Not bullets. Give each theme the space its importance warrants
 rather than an equal share.
 
-## Decisions and Outcomes
-What was actually decided or explicitly deferred, each with its (HH:MM:SS) timestamp.
-If the meeting decided little, say so plainly rather than promoting discussion to
-decision.
-
-## Points of Disagreement
-Where participants differed, what each side held, and whether it was resolved. If a
-disagreement was left open, say so.
-
-## Unresolved Questions
-Questions raised and never answered.
-
-## Participants
-One line per speaker label: the label, the inferred name if the evidence supports one,
-and your confidence in that inference (high / medium / low) with the evidence in a few
-words. Where there is no evidence, write "no name evidence" rather than guessing.
+This section carries the whole meeting. There is no separate section for decisions,
+disagreements or open questions, so each belongs inside the theme it arose in: say what
+was settled and when (HH:MM:SS), where participants differed and whether it resolved,
+and what was left unanswered. Do not promote discussion to decision, and do not add
+section headings beyond the ### topic ones.
 
 NOTES
 {{NOTES}}

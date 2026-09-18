@@ -39,6 +39,20 @@ SAMPLES_PER_SPEAKER = 3
 MAX_CLIP_S = 18.0
 MIN_CLIP_S = 1.5
 
+# Skip the first seconds of a turn when cutting its clip.
+#
+# Turn boundaries land a few words early: the start of a turn routinely carries
+# the tail of the previous speaker (merge.snap_to_sentences moves the boundary
+# but cannot always place it right). That is tolerable in a transcript and fatal
+# in a voice sample, because the clip is cut from the turn's first word and so
+# opens on the wrong person -- reported on three of twelve clips, each time one
+# sentence of somebody else before the right voice starts.
+#
+# 4 s clears a sentence of lead-in. It is only taken where the turn can spare
+# it, so short turns are cut from their start as before.
+CLIP_LEAD_IN_S = 4.0
+CLIP_KEEP_S = 8.0
+
 
 @dataclass
 class Sample:
@@ -74,6 +88,44 @@ def _extract(wav: Path, start: float, duration: float, dest: Path) -> bool:
     return proc.returncode == 0 and dest.exists() and dest.stat().st_size > 0
 
 
+def _clip_start(turn: SpeakerTurn) -> float:
+    """Where to begin this turn's clip, skipping any borrowed lead-in."""
+    first, last = turn.words[0].start, turn.words[-1].end
+    if last - first - CLIP_LEAD_IN_S >= CLIP_KEEP_S:
+        return first + CLIP_LEAD_IN_S
+    return first
+
+
+def _clip_speech_seconds(turn: SpeakerTurn) -> float:
+    """Seconds of actual speech inside the first MAX_CLIP_S of a turn.
+
+    The word intervals are unioned rather than summed: whisper's DTW ends
+    routinely overrun the next word's start (32.5% of consecutive pairs on a
+    measured 2h12m recording), so summing them reports far more speech than the
+    clip can physically hold.
+    """
+    begin = _clip_start(turn)
+    cutoff = begin + MAX_CLIP_S
+    spans: list[list[float]] = []
+    for w in turn.words:
+        if w.start >= cutoff:
+            break
+        if w.end <= begin:
+            continue
+        a, b = max(w.start, begin), min(w.end, cutoff)
+        if spans and a <= spans[-1][1]:
+            spans[-1][1] = max(spans[-1][1], b)
+        else:
+            spans.append([a, b])
+    return sum(b - a for a, b in spans)
+
+
+def _text_within(turn: SpeakerTurn, begin: float, end: float) -> str:
+    """The turn's words inside the clip window -- what the clip contains."""
+    words = [w.text for w in turn.words if w.start < end and w.end > begin]
+    return " ".join(words).strip() or turn.text[:400]
+
+
 def build_samples(
     job, wav: Path, turns: list[SpeakerTurn], meeting_name: str
 ) -> list[Sample]:
@@ -90,20 +142,22 @@ def build_samples(
 
     samples: list[Sample] = []
     for speaker in sorted(speakers):
-        # Longest by spoken duration, not word count: a long slow sentence is a
-        # better voice sample than a fast list of numbers.
+        # Rank by how much SPEECH lands in the clip we would actually cut, not
+        # by the turn's wall-clock span. A turn only breaks at TURN_GAP_S, so a
+        # span can be mostly silence -- ranking by it preferentially picked the
+        # turns with the largest internal gaps, which is precisely backwards.
+        # Measured on a 2h12m meeting: the top-ranked clip for one speaker was
+        # 18 seconds of audio containing the single word "so".
         ranked = sorted(
-            speakers[speaker],
-            key=lambda t: (t.words[-1].end - t.words[0].start),
-            reverse=True,
+            speakers[speaker], key=_clip_speech_seconds, reverse=True
         )
         picked = 0
         for turn in ranked:
             if picked >= SAMPLES_PER_SPEAKER:
                 break
-            start = turn.words[0].start
+            start = _clip_start(turn)
             length = min(turn.words[-1].end - start, MAX_CLIP_S)
-            if length < MIN_CLIP_S:
+            if length < MIN_CLIP_S or _clip_speech_seconds(turn) < MIN_CLIP_S:
                 continue
             name = "spk%02d_%d.mp3" % (speaker, picked + 1)
             if not _extract(wav, start, length, out_dir / name):
@@ -114,7 +168,10 @@ def build_samples(
                     index=picked + 1,
                     start=start,
                     duration=length,
-                    text=turn.text[:400],
+                    # Only the words the clip actually contains. The turn can
+                    # run far past MAX_CLIP_S, and showing its whole text made
+                    # the preview disagree with the audio for every long turn.
+                    text=_text_within(turn, start, start + length)[:400],
                     file=name,
                 )
             )

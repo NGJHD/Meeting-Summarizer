@@ -58,6 +58,20 @@ call :get "models\speaker-embedding.onnx" 90000000 ^
   "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/nemo_en_titanet_large.onnx" ^
   "Speaker embedding model - 97 MB"
 
+rem  Forced alignment. torchaudio's WAV2VEC2_ASR_BASE_960H exported to ONNX by
+rem  tools\export_align_onnx.py -- torchaudio ships no .onnx, so like the
+rem  Vulkan whisper build this is hosted on our own releases. English only; the
+rem  app skips the stage for any other language rather than aligning to the
+rem  wrong phonemes. Without it the pipeline still runs on whisper's own DTW
+rem  timings, which is what shipped before 1.2.0.
+call :get_optional "models\wav2vec2-align.onnx" 350000000 ^
+  "https://github.com/NGJHD/Meeting-Summarizer/releases/download/align-wav2vec2-base-960h/wav2vec2-align.onnx" ^
+  "Word alignment model - 360 MB"
+
+call :get_optional "models\wav2vec2-align.json" 200 ^
+  "https://github.com/NGJHD/Meeting-Summarizer/releases/download/align-wav2vec2-base-960h/wav2vec2-align.json" ^
+  "Word alignment labels - 1 KB"
+
 rem  Both language models ship: the app picks by VRAM at startup and the UI
 rem  lets the user override, so either may be selected on any machine.
 call :get "models\Qwen3.8-27B-UD-IQ3_XXS.gguf" 10000000000 ^
@@ -304,6 +318,23 @@ echo   [skip] %DESC% - already present
 exit /b 0
 
 rem ---------------------------------------------------------------------------
+:get_optional
+rem  %1 target  %2 minimum bytes  %3 url  %4 description
+rem
+rem  As :get, but a failure is not an install failure. Used for models the app
+rem  runs without: word alignment falls back to whisper's own timings, so a
+rem  missing file costs some quality and nothing else. Marking FAILED here
+rem  would tell the user their install is broken when it is not.
+rem  Remember whether anything had already failed: clearing FAILED
+rem  unconditionally would erase an earlier, real failure.
+set "WASFAILED=%FAILED%"
+call :get %1 %2 %3 %4
+if errorlevel 1 (
+  set "FAILED=%WASFAILED%"
+  echo   [skip] %~4 - optional, continuing without it
+)
+exit /b 0
+
 :get
 rem  %1 target  %2 minimum bytes  %3 url  %4 description
 rem  NOTE: the description must not contain ( or ) -- it is echoed inside

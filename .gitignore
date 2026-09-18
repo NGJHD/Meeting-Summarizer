@@ -34,6 +34,10 @@ update.log
 tools/*
 !tools/make_release.py
 !tools/check_release.py
+# models\wav2vec2-align.onnx cannot be rebuilt without this, and it needs a
+# torch install the app does not have -- so the recipe has to be in the repo
+# for the same reason the release scripts are.
+!tools/export_align_onnx.py
 work/
 
 # A note to whoever is cutting the release, not part of the app.

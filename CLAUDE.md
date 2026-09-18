@@ -102,7 +102,8 @@ rather than writing code that assumes it.
 ```
 Audio file
  └─> ffmpeg                    → 16kHz mono WAV
-      ├─> whisper.cpp (GPU)    → segments + word-level timestamps (JSON)
+      ├─> whisper.cpp (GPU)    → segments + words (JSON)
+      │    └─> ALIGN (CPU)     → when each word was actually said (§7.1)
       └─> sherpa-onnx (CPU)    → speaker turns: (start, end, speaker_id)
            └─> MERGE           → speaker-attributed, timestamped transcript
                 └─> CHUNK      → ~10k-token windows
@@ -228,6 +229,7 @@ MeetingSummariser\
     pipeline.py               <- stage orchestration
     audio.py                  <- ffmpeg
     transcribe.py             <- whisper.cpp wrapper
+    align.py                  <- forced alignment, onnxruntime (§7.1)
     diarize.py                <- sherpa-onnx wrapper
     merge.py                  <- transcript + speaker merge
     chunker.py                <- tokenizer-aware chunking
@@ -301,7 +303,9 @@ operator edits this file in Notepad; the end user never sees it.
     "language": "en",
     "threads": 5,
     "max_context": 0,
-    "dtw": true
+    "dtw": true,
+    "align": true,
+    "align_threads": 0
   },
   "diarization": {
     "enabled": true,
@@ -317,7 +321,8 @@ operator edits this file in Notepad; the end user never sees it.
     "merge_centroid_distance": 0.35,
     "min_embed_duration": 1.0,
     "min_coverage_fraction": 0.8,
-    "embedding_cache": true
+    "embedding_cache": true,
+    "embedding_model": ""
   },
   "server": {
     "port": 8000
@@ -437,6 +442,53 @@ diarize). Implement this path too. It is slower but strictly simpler, and it is 
 thing to try when debugging an attribution or resource problem — it removes an entire
 class of interaction from the picture.
 
+### 7.1 Forced alignment — trust the words, not their timestamps
+
+`--dtw` gives word timestamps and they are **not good enough to build turns from**.
+Measured on a 2h12m recording: 32.5% of consecutive word pairs overlap, 4.8% of words
+claim to last over two seconds, and the worst single word claims **43 seconds**. The
+starts are broadly sound; the ends are not.
+
+This matters more than it looks. §9 assigns a speaker to each word by its *midpoint*, and
+`merge` breaks a turn when the gap to the next word exceeds `TURN_GAP_S` — so an inflated
+end swallows the silence behind it and a turn spans a pause it should have broken on. The
+map stage does not read words, it reads speaker-attributed **turns**. Bad timings are
+therefore not a cosmetic problem: measured blind over six summaries built from the same
+notes, aligned timings scored **4.67 against 2.33 out of 5**.
+
+So after transcription, re-time the words against the audio with forced alignment. This
+is a far easier problem than recognition: the words are already known, and CTC emissions
+from a wav2vec2 model scored against them give the best monotonic path.
+
+    emissions → trellis → Viterbi backtrace → character spans → word spans
+
+`server/align.py`, numpy under onnxruntime, **no torch** — the model is torchaudio's
+`WAV2VEC2_ASR_BASE_960H` exported once by `tools/export_align_onnx.py`, because
+torchaudio publishes no ONNX. Roughly 275 s of CPU on a 2h12m recording, after whisper
+has released the GPU, so `align_threads` defaults to `whisper.threads` and the thread
+budget above is preserved.
+
+**Constraints, all of which are load-bearing:**
+
+- **Never fatal.** Missing model, failed segment, exception, cancellation — every path
+  returns whisper's own timings. This runs *after* transcription has been paid for and
+  must never be able to waste it. It is deliberately absent from
+  `config.REQUIRED_FILES`.
+- **Never drops a word.** A word the aligner cannot place keeps its original timing.
+  The caller indexes positionally; a missing word would shift every speaker assignment
+  after it. About 0.5% are digit-only — "20" has no character in an alphabet of 26
+  letters and an apostrophe.
+- **English only.** Any other `whisper.language` skips the stage and logs it. The
+  failure mode otherwise is not an error but confident nonsense, aligning to the wrong
+  phonemes.
+- **fp32, not int8.** Dynamic quantisation is 4× smaller and was rejected: 5.7× slower
+  *and* less accurate (`BUILD_NOTES.md` §9aj).
+
+**Do not reach for WhisperX to get this.** Its aligner is the same wav2vec2 model, but it
+arrives with torch, torchaudio, torchvision and transformers — §0 constraint 3 — and its
+diarizer is the same `segmentation-3.0` already here. Only the alignment was worth having,
+which is why only the alignment was taken.
+
 ---
 
 ## 8. STAGE 3 — DIARIZATION (CPU)
@@ -519,6 +571,19 @@ than leaving it to whoever reads the output.
 it is passed as the cluster count and distance thresholding is skipped entirely — by far
 the most reliable path. The cap in step 3 still applies as a guard.
 
+**When a count is given, skip the centroid merge as well.** It exists to repair
+over-fragmentation from *automatic* thresholding; when the clusterer was told the answer
+there is nothing to repair and merging can only destroy it. Measured on a five-person
+meeting: `num_speakers: 5` clustered to exactly 5, and the merge then collapsed them to
+3 — silently overriding the one input this section calls the most reliable there is
+(`BUILD_NOTES.md` §9ab).
+
+**Ask for speakers, not people.** A participant who speaks for under a minute cannot be
+resolved, and asking for them is actively worse: the clusterer reaches the requested
+count by splitting an active speaker instead. On the same meeting, 4 gave four real
+speakers and 5 split the most active one in two without finding the fifth. The question
+should mean "how many people spoke substantially".
+
 **If diarization fails for any reason, log it and continue with an empty speaker list.**
 The merge stage must degrade gracefully to an unattributed transcript rather than failing
 the job. The same applies when `diarization.enabled` is `false` — the pipeline must run
@@ -535,6 +600,8 @@ merging is the most common source of wrong attribution in this kind of pipeline.
 **Algorithm — operate at word level, not segment level:**
 
 1. Flatten the Whisper JSON into a list of words, each with `(text, t_start, t_end)`.
+   These are the **aligned** timings from §7.1 where the model is present, not whisper's
+   own — steps 2 and 4 below are only as good as they are.
 2. For each word, compute its midpoint `(t_start + t_end) / 2`.
 3. Find the diarization segment containing that midpoint. If none contains it (the word
    falls in a gap), inherit the speaker of the **previous** word.
@@ -728,6 +795,7 @@ default**. Left alone it will burn thousands of reasoning tokens on every map ca
   "temperature": 0.7,
   "top_p": 0.8,
   "top_k": 20,
+  "min_p": 0.0,
   "presence_penalty": 1.5,
   "repeat_penalty": 1.0,
   "chat_template_kwargs": { "enable_thinking": false }
@@ -752,6 +820,15 @@ default**. Left alone it will burn thousands of reasoning tokens on every map ca
 document share it. Measured at 3h51m: ~3440 thinking + a 4158-token document = 7598, i.e.
 95% of 8000. At five hours 8000 binds and the *document* is what gets truncated
 (`BUILD_NOTES.md` §9x).
+
+**On an external server it is derived from that server's context, not fixed.** 12000 is
+only safe because we pass `--reasoning-budget 4000` to our own, so thinking cannot take
+more than a third of it. We cannot set that flag on somebody else's server and there is
+no per-request equivalent, so a model left on its default unlimited budget can spend the
+whole allowance reasoning and return `finish_reason: length` with empty content. Where
+the attached server has context to spare, spend it: `ctx - prompt - 2000`, capped at
+24000. The retry that degrades to thinking-off still exists; this stops it being reached
+by a merely long think, which costs a full generation to discover.
 
 The split is deliberate. Map and group-reduce are mechanical consolidation — reasoning
 buys little and costs a great deal across many calls. The final reduce does cross-section
@@ -857,11 +934,19 @@ Produce the final document from `{{NOTES}}`:
 
 ## Executive Summary        <- 3–5 sentences, no bullets
 ## Key Themes               <- organised by topic, NOT chronologically; flowing prose
-## Decisions and Outcomes   <- with timestamps
-## Points of Disagreement
-## Unresolved Questions
-## Participants             <- speaker labels, inferred names, confidence
 ```
+
+**Two sections, not six.** At the operator's request, Decisions and Outcomes, Points of
+Disagreement, Unresolved Questions and Participants were removed (`BUILD_NOTES.md` §9ag).
+This removes a duplication rather than information: in `both` mode — the default — the
+minutes already carry all four in the terse, scannable form that suits a record, and
+repeating them as prose asked the reader to read the same material twice. Key Themes is
+instructed to carry what was settled, where people differed and what was left open,
+inside the theme each arose in.
+
+Known consequence: a `summary`-only run now has no speaker-label key anywhere, because
+Participants was the only place the labels were enumerated. Renaming is unaffected — it
+substitutes labels wherever they appear, and they still appear inline.
 
 Explicitly instruct: organise by theme, not by time. A chronological retelling of a
 6-hour meeting is nearly as long as the transcript and nearly as useless.
@@ -941,8 +1026,11 @@ Single page, no framework, no bundler, no CDN references. Everything served loca
 
 4. Participant count — optional numeric input, *"How many people spoke? (optional —
    leave blank if unsure)"*. Blank means auto-cluster then prune (§8.1); a number is
-   passed straight to the clusterer and distance thresholding is skipped, which is much
-   the most reliable path on a long recording.
+   passed straight to the clusterer, and both distance thresholding **and the centroid
+   merge** are skipped, which is much the most reliable path on a long recording.
+
+   It means people who spoke *substantially*. Someone who said a few words in two hours
+   cannot be separated, and asking for them costs a real speaker instead — see §8.1.
 
    This is the **only** UI control beyond the three above. §16's ban on settings screens
    covers inference parameters; it does not cover metadata about the recording, and
@@ -1222,11 +1310,23 @@ The build is done when all of these pass:
 11. Setting `diarization.enabled: false` runs the full pipeline with unattributed output.
 12. Setting `pipeline.concurrent_diarization: false` produces the same merged transcript
     as the concurrent path on the same input.
+
+    **Caveat found in practice:** identical settings do *not* guarantee an identical
+    partition. Embedding under a different `diarization.threads` perturbs the vectors
+    enough to flip a borderline clustering — the same audio at 5 and 6 threads gave
+    materially different speaker shares (`BUILD_NOTES.md` §9ae). Compare the transcript
+    text and turn boundaries, not the speaker numbering.
 13. Killing the diarization process mid-run does not abort transcription; the job finishes
     with unattributed output.
 14. Names, figures and dates in the output match the transcript. Spot-check ten.
 15. In minutes mode, every action item owner appears by name or label in the transcript.
     No invented owners, no invented deadlines.
+16. Deleting `models/wav2vec2-align.onnx` still produces a complete job, logging that
+    alignment was skipped. So does setting `whisper.align: false`, and so does a
+    `whisper.language` other than `en` (§7.1).
+17. Supplying a participant count produces exactly that many speakers. Verify the
+    centroid merge did not reduce it afterwards — the log line reads `clusters N -> N`
+    (§8.1).
 
 ---
 

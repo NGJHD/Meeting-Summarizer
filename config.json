@@ -11,7 +11,7 @@
     "startup_timeout_s": 180,
     "idle_timeout_s": 300,
     "external": {
-      "enabled": false,
+      "enabled": true,
       "port": 9931
     }
   },
@@ -41,7 +41,9 @@
     "language": "en",
     "threads": 5,
     "max_context": 0,
-    "dtw": true
+    "dtw": true,
+    "align": true,
+    "align_threads": 0
   },
   "diarization": {
     "enabled": true,
@@ -57,7 +59,8 @@
     "merge_centroid_distance": 0.35,
     "min_embed_duration": 1.0,
     "min_coverage_fraction": 0.8,
-    "embedding_cache": true
+    "embedding_cache": true,
+    "embedding_model": ""
   },
   "server": {
     "port": 8000
