@@ -427,13 +427,22 @@ roughly 40 min transcribe + 30 min diarize, concurrent is roughly 45 min total.
 **Constraints when running concurrently:**
 
 - **Budget threads explicitly.** Both processes will otherwise each claim ~8 threads and
-  contend. `whisper.threads` and `diarization.threads` in `config.json` default to 6 each;
-  their sum must not exceed the machine's logical core count minus 2.
+  contend. `whisper.threads` is 5; `diarization.threads` is `"auto"` — half the logical
+  cores, clamped to [5, 12] (`diarize.resolve_threads`). Their sum should not exceed the
+  machine's logical core count minus 2, though on a small machine `auto` may exceed that
+  slightly: whisper is GPU-bound and its threads mostly feed the card.
 
-  `diarization.threads` is not purely a speed knob: a different count changes the
-  embeddings in the last decimal place (3.5e-07), which used to be enough to change the
-  speakers entirely. §8.1 removed that sensitivity, and this is why it mattered — a
-  setting the operator is invited to tune was silently a quality lottery.
+  Embedding is the bulk of a run, so this is the one setting that materially changes how
+  long a job takes. Measured on 24 logical cores over the full pass: 24.3 min at 5
+  threads, 19.8 at 12. The cap is 12 because the curve flattens — 12 to 20 is 67% more
+  threads for 6% less time. The floor is 5 because that is the constant `auto` replaced;
+  `cores // 2` would give 2 on a quad-core, which is the worst value measured
+  (`BUILD_NOTES.md` §9av).
+
+  It is safe to tune *only because* §8.1 fixed the clustering. A different thread count
+  changes the embeddings by 3.5e-07, and that used to re-roll the speaker assignment
+  entirely — so this was silently a quality lottery, not a speed knob. Verified after the
+  fix: 1, 5, 8 and 12 threads now give byte-identical partitions.
 - **Failures are independent.** If diarization fails, transcription must continue to
   completion and the pipeline degrades to unattributed output. If transcription fails,
   cancel diarization and fail the job — there is nothing to merge.

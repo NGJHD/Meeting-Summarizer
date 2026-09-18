@@ -38,6 +38,49 @@ class Turn:
     speaker: int
 
 
+# Diminishing returns set in early. Embedding is closer to memory-bandwidth
+# bound than core bound, so threads buy far less than they look like they
+# should -- measured on a 12-core/24-thread machine over a fixed slice:
+#
+#     threads    2      4      6      8     10     12     16     20
+#     time    84.8s  71.5s  57.8s  56.1s  50.1s  48.6s  46.8s  45.6s
+#
+# Ten times the threads is 1.86x the speed. Past twelve, 67% more threads buy
+# 6% less time -- and during the concurrent phase those threads are competing
+# with whisper for the same machine (section 7's budget). So: half the logical
+# cores, capped where the curve flattens.
+MAX_AUTO_THREADS = 12
+# The floor is the value this replaced, not a measured optimum. `cores // 2`
+# falls below it under ten logical cores -- 2 on a quad-core -- and 2 is the
+# worst number in the table above, on exactly the machines where diarization
+# already hurts most. Detection may not make anything slower than the constant
+# it is replacing.
+#
+# Note this can exceed section 7's budget on a small machine: at 12 logical
+# cores it asks for 6 where the budget allows 5. Accepted, because whisper is
+# GPU-bound and its threads mostly feed the card rather than saturating them.
+# No small machine has been measured; if one ever is, measure before lowering.
+MIN_AUTO_THREADS = 5
+
+
+def resolve_threads(value) -> int:
+    """`"auto"` -> half the logical cores, clamped. A number is taken as given.
+
+    Section 4 says every machine-dependent value is detected rather than
+    guessed; this one was hard-coded to 5, which oversubscribes a 4-core laptop
+    and uses under half of a 24-thread desktop.
+    """
+    if isinstance(value, str) and value.strip().lower() == "auto":
+        import os
+
+        cores = os.cpu_count() or 4
+        return max(MIN_AUTO_THREADS, min(MAX_AUTO_THREADS, cores // 2))
+    try:
+        return max(1, int(value))
+    except (TypeError, ValueError):
+        return 5
+
+
 def run(job: Job, cfg: dict, wav: Path) -> list[Turn]:
     """Return speaker turns as (start, end, speaker_id), or [] on any failure."""
     dcfg = cfg["diarization"]
@@ -65,7 +108,7 @@ def run(job: Job, cfg: dict, wav: Path) -> list[Turn]:
     params = {
         "segmentation_model": str(seg_path),
         "embedding_model": str(emb_path),
-        "threads": int(dcfg.get("threads", 5)),
+        "threads": resolve_threads(dcfg.get("threads", "auto")),
         "num_speakers": int(dcfg.get("num_speakers", 0)),
         "cluster_threshold": float(dcfg.get("cluster_threshold", 0.7)),
         "min_duration_on": float(dcfg.get("min_duration_on", 0.3)),
@@ -110,7 +153,8 @@ def run(job: Job, cfg: dict, wav: Path) -> list[Turn]:
         return []
 
     job.register_proc(proc)
-    job.log("diarization: started on %d threads" % int(dcfg.get("threads", 5)))
+    job.log("diarization: started on %d threads"
+            % resolve_threads(dcfg.get("threads", "auto")))
 
     # sherpa reports nothing at all during its segmentation phase, which on a
     # multi-hour recording is many minutes of total silence in the log. Without

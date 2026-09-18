@@ -47,7 +47,7 @@
   },
   "diarization": {
     "enabled": true,
-    "threads": 5,
+    "threads": "auto",
     "num_speakers": 0,
     "cluster_threshold": 0.7,
     "min_duration_on": 0.3,

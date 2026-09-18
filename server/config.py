@@ -271,7 +271,9 @@ _DEFAULTS = {
     },
     "diarization": {
         "enabled": True,
-        "threads": 5,
+        # "auto" = half the logical cores, capped at 12 (diarize.resolve_threads).
+        # An explicit number still wins, as everywhere else in this file.
+        "threads": "auto",
         "num_speakers": 0,
         "cluster_threshold": 0.70,
         "min_duration_on": 0.3,

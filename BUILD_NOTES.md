@@ -3616,3 +3616,51 @@ manifest of every element id, and were obvious within seconds on screen:
   GiB and the other decimal.
 
 None of these is reachable by a static check. A screenshot is a test.
+
+## 9av. `diarization.threads` is detected now, and it is safe to be
+
+Embedding is the bulk of a run -- about 24 of the 28 minutes on a 2h12m
+recording -- and `diarization.threads` was hard-coded to 5 on every machine,
+while section 4 says everything machine-dependent is detected rather than
+guessed. Section 7 also says the default is 6; `config.json` shipped 5. Nobody
+had reconciled them.
+
+Measured on a 12-core/24-thread Ryzen 9 3900X, the full 7925-window pass, idle:
+
+| threads | embed | against 5 |
+|---|---|---|
+| 5 | 1460 s (24.3 min) | -- |
+| 8 | 1356 s (22.6 min) | 1.08x |
+| 12 | **1188 s (19.8 min)** | **1.23x** |
+
+`diarization.threads: "auto"` now resolves to half the logical cores, clamped
+to [5, 12] (`diarize.resolve_threads`). An explicit number still wins.
+
+- **12 is the cap** because the curve flattens: over a fixed slice, 12 to 20
+  threads is 67% more threads for 6% less time, and during the concurrent phase
+  those threads compete with whisper.
+- **5 is the floor** because that is the constant this replaces, not because it
+  was measured. `cores // 2` gives 2 on a quad-core, and 2 is the worst number
+  in the table. Detection must not make any machine slower than the constant it
+  replaces. No small machine has been measured.
+- On 12 logical cores this asks for 6 where section 7's budget allows 5.
+  Accepted: whisper is GPU-bound and its threads mostly feed the card.
+
+### It is only safe because of 9au
+
+Thread count changes the embeddings by 3.5e-07, and until 9au that was enough to
+re-roll the speaker assignment. Verified after the fix -- the full pass at 1, 5,
+8 and 12 threads produces **the same partition, same label hash**
+(32.6/27.8/27.0/12.6). Before 9au this tuning would have been unshippable: it
+would have traded four minutes for a different set of speakers.
+
+### A benchmark that measured the wrong thing
+
+The first attempt timed a 300-window slice, and was then compared against a 953 s
+figure lifted from a production job log. That gave "12 threads is 25% slower",
+the opposite of the truth. The slice was fine -- it predicted 1.30x against an
+actual 1.23x -- but the baseline was a run under different conditions, and a
+controlled pair was needed, not a convenient number already written down.
+
+`tools/thread_bench.py` sweeps counts over a slice. Useful for shape; the
+decision needs the full pass.
