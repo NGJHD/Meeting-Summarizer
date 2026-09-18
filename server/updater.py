@@ -219,6 +219,90 @@ def _download(url: str, dest: Path, total_hint: int) -> None:
                 _set(downloaded=done)
 
 
+# Models a newer version needs that an older install cannot have.
+#
+# The update payload is the source zip and must stay small -- it is 230 KB, and
+# the whole point of not shipping the full bundle is that an update should not
+# be a gigabyte (BUILD_NOTES section 9q). But a release that adds a model then
+# leaves an updated install silently missing it: the app degrades quietly to
+# whisper's own word timings and says so only in temp\job.log, where nobody is
+# looking. Telling the user to go and run DOWNLOAD_MODELS.bat is not an answer
+# either -- they updated from a button and have no reason to suspect a second
+# step exists.
+#
+# So the updater fetches them itself, after the payload and before the restart.
+# Each is optional by construction: the app runs without it, so a failure here
+# warns and carries on rather than abandoning an update that is otherwise fine.
+EXTRA_MODELS = (
+    {
+        "path": "models/wav2vec2-align.onnx",
+        "min_size": 350_000_000,
+        "size_hint": 377_811_056,
+        "label": "word alignment model",
+        "url": "https://github.com/%s/releases/download/"
+               "align-wav2vec2-base-960h/wav2vec2-align.onnx" % version.GITHUB_REPO,
+    },
+    {
+        "path": "models/wav2vec2-align.json",
+        "min_size": 200,
+        "size_hint": 277,
+        "label": "word alignment labels",
+        "url": "https://github.com/%s/releases/download/"
+               "align-wav2vec2-base-960h/wav2vec2-align.json" % version.GITHUB_REPO,
+    },
+)
+
+
+def missing_models() -> list:
+    """Which EXTRA_MODELS this install does not already have.
+
+    Size is checked as well as existence: a half-finished download from a
+    previous attempt is worse than nothing, because the app would load it.
+    """
+    out = []
+    for m in EXTRA_MODELS:
+        target = config.ROOT / m["path"]
+        try:
+            if target.exists() and target.stat().st_size >= m["min_size"]:
+                continue
+        except OSError:
+            pass
+        out.append(m)
+    return out
+
+
+def fetch_models(items: list) -> list:
+    r"""Download each into models\, via .partial so a failure leaves nothing.
+
+    Returns the ones that failed. Never raises for a download problem: the
+    update itself has already succeeded by this point.
+    """
+    failed = []
+    for n, m in enumerate(items, 1):
+        target = config.ROOT / m["path"]
+        partial = target.with_suffix(target.suffix + ".partial")
+        _set(phase="downloading",
+             message="Downloading the %s (%d of %d)" % (m["label"], n, len(items)),
+             downloaded=0, total=m.get("size_hint") or 0)
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            _download(m["url"], partial, m.get("size_hint") or 0)
+            if partial.stat().st_size < m["min_size"]:
+                raise RuntimeError("file is smaller than expected")
+            partial.replace(target)
+        except Exception as exc:  # noqa: BLE001 - an optional model
+            if _cancel.is_set():
+                raise
+            failed.append(m)
+            try:
+                partial.unlink()
+            except OSError:
+                pass
+            from . import jobs
+            jobs.log_exception(exc)
+    return failed
+
+
 def _verify(folder: Path, expected_tag: str) -> Path:
     """Return the folder that actually holds the app, or raise.
 
@@ -287,6 +371,16 @@ def install(url: str, size_bytes: int, tag: str, port: int) -> None:
 
         _set(phase="verifying", message="Checking the download")
         ready = _verify(unpacked, tag)
+
+        # Anything this version needs that the running one never had. Done here
+        # rather than after the restart: the app is still up, the user is
+        # watching a progress bar, and a model that arrives now is in place the
+        # first time they process a recording.
+        missing = missing_models()
+        if missing:
+            failed = fetch_models(missing)
+            if failed:
+                _set(extra_failed=", ".join(m["label"] for m in failed))
 
         _set(phase="applying",
              message="Restarting to finish the update")

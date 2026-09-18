@@ -3076,3 +3076,45 @@ fp32). Presumably the conv stack falls off its fast kernels. fp32 ships.
 - It costs ~275 s of CPU on a 2h12m recording, after whisper has released the
   GPU, so `align_threads` defaults to `whisper.threads` and section 7's thread
   budget is preserved.
+
+## 9ak. An update that added a model did not bring the model
+
+Reported immediately after 1.2.0: updating a 1.1.0 install from the button
+succeeded and relaunched, and nothing anywhere said that a 360 MB model was now
+expected. The app degraded silently to whisper's own word timings and logged it
+to `temp\job.log`, which nobody reads. The user got a working application
+producing quietly worse summaries -- the exact failure section 7.1's
+"never fatal" rule was supposed to make *safe*, not *invisible*.
+
+The update payload is the source zip and nothing else, by design (section 9q): a
+230 KB update must not become a gigabyte, and the full bundle carries
+`runtime\python.exe`, which cannot overwrite the interpreter executing it. So
+`models\` was never in scope. That was correct while releases only changed code
+and wrong the moment one added a model.
+
+Telling the user to run `DOWNLOAD_MODELS.bat` afterwards is not a fix either.
+They updated from a button inside the app; there is no reason for them to
+suspect a second step exists, and a step nobody knows about has not happened.
+
+**`updater.EXTRA_MODELS`** now lists what a version needs that an older install
+cannot have. After the payload is verified and before the restart, anything
+missing is downloaded into `models\`:
+
+- **Size-checked, not just existence-checked.** A truncated file from an earlier
+  attempt is worse than an absent one, because the app would load it.
+- **Downloaded to `.partial`, then renamed.** A failure leaves nothing behind.
+- **Never fails the update.** These models are optional by construction, so a
+  failure warns and carries on rather than abandoning an update that is
+  otherwise complete and already verified.
+- **And it is visible.** `extra_failed` reaches the About panel. Silence here is
+  the bug being fixed; replacing one silent degradation with another would miss
+  the point.
+
+Verified against the live release: both files downloaded, SHA-256 identical to
+the originals, no `.partial` left behind, and the downloaded model aligned 217
+of 217 words. A deliberately truncated file was correctly re-reported as
+missing.
+
+**Fresh installs are unaffected either way** -- the model travels inside
+`-full.zip`, and `DOWNLOAD_MODELS.bat` fetches it for a source install. This
+was only ever the upgrade path.

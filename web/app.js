@@ -1070,8 +1070,17 @@
           if (p.phase === "restarting") {
             clearInterval(about.timer); about.timer = null;
             $("update-fill").style.width = "100%";
+            // A model this version needs may have failed to download. The
+            // update is still good -- the app runs without it -- but saying
+            // nothing would leave the user with quietly worse output and no
+            // idea why.
             updateMsg("Update ready. The application will close and reopen by " +
-                      "itself — this page will reconnect.");
+                      "itself — this page will reconnect." +
+                      (p.extra_failed
+                        ? " One optional download didn't arrive (" +
+                          p.extra_failed + "). Everything works without it; " +
+                          "to fetch it, run DOWNLOAD_MODELS.bat or update again."
+                        : ""));
           } else if (p.phase === "error") {
             clearInterval(about.timer); about.timer = null;
             resetUpdate();
