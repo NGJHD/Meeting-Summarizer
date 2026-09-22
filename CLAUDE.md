@@ -344,8 +344,10 @@ always wins: `llm.model` picks the quantisation this card can hold (§13.3),
 `llm.threads` omits the flag so llama.cpp uses the physical core count, and `gpu.backend`
 chooses CUDA, Vulkan or CPU per engine (§2.1).
 
-`llm.external` is the one block the UI writes to (§13.3): the Model dropdown sets it
-when `Port` is chosen and clears it otherwise, and touches nothing else in this file.
+`llm.external` and `ui.mode` are the only things the UI writes to this file. The Model
+dropdown sets `llm.external` when `Port` is chosen and clears it otherwise (§13.3); the
+Output dropdown writes `ui.mode` (§13.2). Both are written on change, both are validated
+before being stored and again when read back, and neither touches anything else here.
 `llm.spec_type` is speculative decoding — `""` omits the flag, `"draft-mtp"` uses the
 multi-token-prediction layer carried inside the GGUF itself.
 `thinking.reduce_budget_tokens` caps reasoning so it cannot eat the whole of
@@ -1013,8 +1015,20 @@ Single page, no framework, no bundler, no CDN references. Everything served loca
 **Elements:**
 1. Drop zone — accepts drag-and-drop, and opens a file picker on click. Shows filename,
    size and detected duration once selected.
-2. Mode dropdown — `Summary` / `Minutes` / `Summary & Minutes`. Default
+2. Mode dropdown — `Summary` / `Minutes` / `Summary & Minutes`. Defaults to
+   **whatever was chosen last time**, from `ui.mode`; a fresh install opens on
    **`Summary & Minutes`**, at the operator's request.
+
+   Remembered at the operator's request, and the reasoning is the opposite of
+   the Model dropdown's. There the last choice is *discarded* because detection
+   knows the machine better than a decision made once (§13.3). Here there is
+   nothing to detect: which document somebody wants is a fact about them and
+   their meetings, so the last choice is the best guess available. Written on
+   change rather than on Process, matching the Port box.
+
+   An unrecognised value — a hand-edit, or one written by a version offering a
+   mode this one does not — falls back to `both` rather than reaching the page
+   as a dropdown with nothing selected.
 
    That third mode was also added at the operator's request, overriding the
    prohibition that used to sit in §16. It is not a second pipeline:
@@ -1050,7 +1064,8 @@ Single page, no framework, no bundler, no CDN references. Everything served loca
    `llm.external.port` on change, not on Process, so setting up a port and closing the
    window does not lose it. High or Low clears the flag and the next launch re-detects —
    detection beats a choice made once on a machine whose card may since have changed. The
-   port number survives either way. Nothing else in `config.json` is touched by the UI.
+   port number survives either way. The Output dropdown's `ui.mode` (§13.2) is the only
+   other thing the UI writes; nothing else in `config.json` is touched by it.
 
 4. Participant count — optional numeric input, *"How many people spoke? (optional —
    leave blank if unsure)"*. Blank means auto-cluster then prune (§8.1); a number is

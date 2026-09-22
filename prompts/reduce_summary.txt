@@ -1,6 +1,13 @@
 You are writing the final summary of a meeting from the working notes below. The reader
 did not attend and will not read the transcript. This document is all they will see.
 
+They will not see the notes either, and they do not know the recording was processed in
+pieces. So never mention the notes, a section, a segment or a chunk: write about the
+meeting, not about your source. Where the notes record that something is unclear or was
+never stated, that is a fact about the meeting - "the owner was never named", "it was
+left unresolved" - not a fact about the notes. Never write "the notes do not record",
+"in the second segment" or "reconfirmed in Section 4".
+
 Meeting: {{MEETING_NAME}}
 Duration: {{DURATION}}
 
@@ -29,6 +36,14 @@ settled, and what it did not.
 The substance of the meeting, organised by topic. Flowing prose under short topic
 sub-headings (###). Not bullets. Give each theme the space its importance warrants
 rather than an equal share.
+
+A heading may join closely related aspects of one subject: "Budget Review & Forecasting" is
+one theme. It may not join separate systems, products or deliverables that merely happen
+to be the same kind of thing — "Third-Party Systems: Payroll, CRM & Ticketing Portal"
+is three themes and must be split into three, and "Budget Review, Forecasting & Office
+Move" is two. The test is whether a reader looking for one of the things named in
+the heading would find everything the meeting said about it underneath. Splitting like
+this does not mean writing less about each; do not let a theme shrink to a single line.
 
 This section carries the whole meeting. There is no separate section for decisions,
 disagreements or open questions, so each belongs inside the theme it arose in: say what

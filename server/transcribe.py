@@ -195,6 +195,36 @@ def _build_command(cfg: dict, wav: Path, out_prefix: Path) -> list[str]:
 ALIGN_MODEL = "wav2vec2-align.onnx"
 
 
+def _timing_source(cfg: dict) -> str:
+    """What produced the word timings whisper handed us: DTW, or segment ends.
+
+    Named in every alignment log line so the operator can tell, from the log
+    alone, which of the two timing sources the merge stage is about to read.
+    """
+    return "DTW" if cfg["whisper"].get("dtw", True) else "segment-level"
+
+
+def _align_heartbeat(job: Job):
+    """Log alignment progress at roughly every quarter, and nothing in between.
+
+    Forced alignment is ~275s of silent CPU on a 2h12m recording, immediately
+    after a transcription stage that printed a line a second. Without this the
+    log looks hung at exactly the point the user is most likely to be watching.
+    """
+    last = [-1]
+
+    def on_progress(done: int, total: int) -> None:
+        if total <= 0:
+            return
+        pct = int(done * 100 / total)
+        if pct >= last[0] + 25 and pct < 100:
+            last[0] = pct - pct % 25
+            job.log("align: wav2vec2 %d%% (%d of %d utterances)"
+                    % (pct, done, total))
+
+    return on_progress
+
+
 def realign(job: Job, cfg: dict, wav: Path, words: list[Word]) -> list[Word]:
     """Replace whisper's DTW word timings with forced alignment.
 
@@ -208,7 +238,11 @@ def realign(job: Job, cfg: dict, wav: Path, words: list[Word]) -> list[Word]:
     already been paid for, so it must never be able to fail the job; a missing
     model just means the timings stay the ones whisper gave us.
     """
-    if not cfg["whisper"].get("align", True) or not words:
+    if not words:
+        return words
+    if not cfg["whisper"].get("align", True):
+        job.log("align: disabled in config.json, keeping whisper's %s word timings"
+                % _timing_source(cfg))
         return words
     # The shipped alignment model is English-only (torchaudio's
     # WAV2VEC2_ASR_BASE_960H, a 26-letter alphabet). On another language it
@@ -216,33 +250,42 @@ def realign(job: Job, cfg: dict, wav: Path, words: list[Word]) -> list[Word]:
     # return confident nonsense, which is worse than doing nothing.
     language = str(cfg["whisper"].get("language", "en") or "en").lower()
     if language not in ("en", "english"):
-        job.log("align: model is English-only, keeping whisper's timings "
-                "for language %r" % language)
+        job.log("align: wav2vec2 is English-only, keeping whisper's %s word "
+                "timings for language %r" % (_timing_source(cfg), language))
         return words
     model = config.MODELS / ALIGN_MODEL
     if not model.exists():
-        job.log("align: %s missing, keeping whisper's timings" % ALIGN_MODEL)
+        job.log("align: %s missing, keeping whisper's %s word timings"
+                % (ALIGN_MODEL, _timing_source(cfg)))
         return words
 
     from . import align as align_mod
 
     try:
         t0 = time.time()
-        job.log("align: re-timing %d words" % len(words))
         threads = int(cfg["whisper"].get("align_threads")
                       or cfg["whisper"].get("threads", 5))
+        job.log("align: re-timing %d words with wav2vec2 forced alignment "
+                "on %d threads (replacing whisper's %s timings)"
+                % (len(words), threads, _timing_source(cfg)))
         timings, replaced = align_mod.align_words(
             words, wav, model, lambda t: bool(SENTENCE_END.search(t)),
             threads=threads, should_cancel=lambda: job.cancelled,
+            on_progress=_align_heartbeat(job),
         )
     except Exception as exc:  # noqa: BLE001 - never fail a paid-for transcript
-        job.log("align: %s, keeping whisper's timings" % exc)
+        job.log("align: failed (%s), keeping whisper's %s word timings"
+                % (exc, _timing_source(cfg)))
         return words
 
-    if job.cancelled or replaced == 0:
+    if job.cancelled:
         return words
-    job.log("align: %d of %d words re-timed in %.0fs"
-            % (replaced, len(words), time.time() - t0))
+    if replaced == 0:
+        job.log("align: wav2vec2 placed no words, keeping whisper's %s word timings"
+                % _timing_source(cfg))
+        return words
+    job.log("align: wav2vec2 re-timed %d of %d words in %.0fs - word timings "
+            "are the aligned ones" % (replaced, len(words), time.time() - t0))
     return [Word(w.text, a, max(b, a)) for w, (a, b) in zip(words, timings)]
 
 
@@ -256,6 +299,11 @@ def run(job: Job, cfg: dict, wav: Path) -> list[Word]:
         json_path.unlink()
 
     cmd = _build_command(cfg, wav, out_prefix)
+    # The command line is logged without argv[0], so name the build separately:
+    # which backend transcription ran on is otherwise nowhere in the job log,
+    # and it is the first thing to ask when this stage is unexpectedly slow.
+    job.log("whisper: %s via %s, word timings from %s"
+            % (Path(cmd[0]).name, config.backend("whisper"), _timing_source(cfg)))
     job.log("whisper: " + " ".join(cmd[1:]))
 
     # whisper's stderr goes to a FILE, not a pipe.

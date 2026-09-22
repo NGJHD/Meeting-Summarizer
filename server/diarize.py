@@ -30,6 +30,26 @@ EMBEDDING_MODEL = "speaker-embedding.onnx"
 CREATE_NEW_PROCESS_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
+# The worker's stage names, in plain English for the log the user watches.
+STAGE_STARTS = {
+    "segment": "segmenting: finding speech and speaker changes",
+    "embed": "embedding: measuring each voice (the slow part)",
+    "cluster": "clustering: grouping the voices into speakers",
+    "reconstruct": "building speaker turns from the clustered voices",
+    "cache": "reusing cached voice measurements",
+    "cache_segment": "reusing the cached segmentation for this audio",
+    "cache_embed": "reusing the cached voice measurements for this audio",
+}
+STAGE_NAMES = {
+    "segment": "segmenting",
+    "embed": "embedding",
+    "cluster": "clustering",
+    "reconstruct": "turn building",
+    "cache": "cache load",
+    "cache_segment": "segmentation cache load",
+    "cache_embed": "embedding cache load",
+}
+
 
 @dataclass
 class Turn:
@@ -129,7 +149,20 @@ def run(job: Job, cfg: dict, wav: Path) -> list[Turn]:
     error = ""
     degraded = ""
     stage = ""
+    stage_started = started
     last_pct = -10
+
+    def close_stage() -> None:
+        """Say that the stage just finished, and how long it took.
+
+        Each of the three stages is minutes long on a real recording, and a
+        start line on its own leaves the reader unable to tell which one they
+        are waiting in -- STAGE only arrives when the *next* stage begins.
+        """
+        if stage:
+            job.log("diarization: %s finished in %.0fs"
+                    % (STAGE_NAMES.get(stage, stage), time.time() - stage_started))
+
     try:
         assert proc.stdout is not None
         for line in proc.stdout:
@@ -142,20 +175,20 @@ def run(job: Job, cfg: dict, wav: Path) -> list[Turn]:
                     continue
                 if pct >= last_pct + 10:
                     last_pct = pct
-                    job.log("diarization: %s %d%%" % (stage or "working", pct))
+                    job.log("diarization: %s %d%%"
+                            % (STAGE_NAMES.get(stage, stage or "working"), pct))
             elif line.startswith("STAGE "):
+                close_stage()
                 stage = line[6:]
+                stage_started = time.time()
                 last_pct = -10
-                job.log("diarization: %s" % {
-                    "segment": "finding speech and speaker changes",
-                    "embed": "measuring voices (the slow part)",
-                    "cluster": "grouping voices",
-                    "cache": "reusing cached voice measurements",
-                }.get(stage, stage))
+                job.log("diarization: %s" % STAGE_STARTS.get(stage, stage))
             elif line.startswith("DEGRADED "):
                 degraded = line[9:]
             elif line.startswith("ERROR "):
                 error = line[6:]
+        if not error:
+            close_stage()
     finally:
         done.set()
         try:

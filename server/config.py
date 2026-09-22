@@ -289,7 +289,17 @@ _DEFAULTS = {
         "embedding_model": "",
     },
     "server": {"port": 8000},
+    # What the Output dropdown was last set to. Written by the UI on change
+    # (section 13.2), so a user who always wants minutes is not re-picking it
+    # every time. Unlike the model choice there is nothing to detect here --
+    # which document somebody wants is a fact about them, not about the
+    # machine -- so the last choice is simply the best guess available.
+    "ui": {"mode": "both"},
 }
+
+# The Output dropdown's vocabulary, which is also the wire value: "both" is
+# the two documents from one set of notes, not a third kind of document.
+MODES = ("summary", "minutes", "both")
 
 
 def _merge(base: dict, over: dict) -> dict:
@@ -320,19 +330,16 @@ def load_config() -> dict:
     return cfg
 
 
-def save_llm_choice(external: bool, port: int | None = None) -> None:
-    """Remember the Model dropdown's choice across restarts (section 13.3).
+def _edit_config(mutate) -> None:
+    """Apply `mutate` to config.json's raw contents and write it back.
 
-    Only `llm.external` is written, and only the two keys the dropdown owns.
     The file is read *raw* rather than through load_config(), so an operator's
     hand-edited config keeps exactly the keys they put in it: writing the
     merged result back would bake every current default into the file and
     quietly freeze it against any later change to _DEFAULTS.
 
-    Picking High or Low clears the flag rather than pinning the quantisation --
-    the detection in hardware.choose_key is right far more often than a choice
-    made once on a machine that may since have had its card changed. The port
-    number survives either way, so switching back does not ask for it again.
+    Shared by the two things the UI is allowed to remember, so there is one
+    place that knows how to touch the operator's file without trampling it.
     """
     raw: dict = {}
     if CONFIG_PATH.exists():
@@ -347,13 +354,57 @@ def save_llm_choice(external: bool, port: int | None = None) -> None:
     if not isinstance(raw, dict):
         raise RuntimeError("config.json is not an object, so the choice was "
                            "not saved.")
-    llm = raw.setdefault("llm", {})
-    ext = llm.setdefault("external", {})
-    ext["enabled"] = bool(external)
-    if port is not None:
-        ext["port"] = int(port)
-    write_atomic(CONFIG_PATH, json.dumps(raw, indent=2) + "\n")
+    mutate(raw)
+    write_atomic(CONFIG_PATH, json.dumps(raw, indent=2) + '\n')
 
+
+def save_llm_choice(external: bool, port: int | None = None) -> None:
+    """Remember the Model dropdown's choice across restarts (section 13.3).
+
+    Only `llm.external` is written, and only the two keys the dropdown owns.
+
+    Picking High or Low clears the flag rather than pinning the quantisation --
+    the detection in hardware.choose_key is right far more often than a choice
+    made once on a machine that may since have had its card changed. The port
+    number survives either way, so switching back does not ask for it again.
+    """
+    def mutate(raw: dict) -> None:
+        ext = raw.setdefault("llm", {}).setdefault("external", {})
+        ext["enabled"] = bool(external)
+        if port is not None:
+            ext["port"] = int(port)
+
+    _edit_config(mutate)
+
+
+def save_mode_choice(mode: str) -> None:
+    """Remember the Output dropdown across restarts.
+
+    Only `ui.mode` is written. An unrecognised value is refused rather than
+    stored: this file is read back on every launch, and a junk mode would
+    silently fall through to the default for ever without anyone working out
+    why their choice keeps resetting.
+    """
+    if mode not in MODES:
+        raise RuntimeError("%r is not one of %s." % (mode, ", ".join(MODES)))
+
+    def mutate(raw: dict) -> None:
+        raw.setdefault("ui", {})["mode"] = mode
+
+    _edit_config(mutate)
+
+
+def ui_mode(cfg: dict | None = None) -> str:
+    """The Output dropdown's remembered value, or the default.
+
+    Anything unrecognised -- a hand-edit, or a value written by a version that
+    offered a mode this one does not -- falls back rather than reaching the UI
+    as a dropdown with no option selected.
+    """
+    if cfg is None:
+        cfg = load_config()
+    mode = str((cfg.get("ui") or {}).get("mode") or "")
+    return mode if mode in MODES else "both"
 
 def external_llm(cfg: dict | None = None) -> tuple[bool, int]:
     """(is an external server configured, which port)."""

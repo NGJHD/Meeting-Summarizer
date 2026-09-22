@@ -439,7 +439,46 @@
 
   // "Both" adds one extra final-reduce call over the same notes, not a second
   // pipeline, so the extra cost is modest but worth mentioning.
-  $("mode").addEventListener("change", showEstimate);
+  $("mode").addEventListener("change", function () {
+    showEstimate();
+    saveMode();
+  });
+
+  // Remembered across launches, like the Model dropdown's Port. Which document
+  // somebody wants is a fact about them and their meetings, not something the
+  // machine can detect, so the last choice is the best default available.
+  var lastMode = "";
+
+  function saveMode() {
+    var mode = $("mode").value;
+    if (mode === lastMode) return;
+    lastMode = mode;
+    fetch("/api/mode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: mode })
+    })
+      .then(function (r) { if (!r.ok) lastMode = ""; })
+      .catch(function () { lastMode = ""; });   // saving is a convenience
+  }
+
+  // Applied before the estimate is drawn, so the figure matches the dropdown.
+  // A value this build does not offer is ignored: the server falls back, and
+  // the markup's own `selected` stands.
+  fetch("/api/mode")
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      var sel = $("mode"), want = String(d && d.mode || "");
+      for (var i = 0; i < sel.options.length; i++) {
+        if (sel.options[i].value === want) {
+          sel.value = want;
+          break;
+        }
+      }
+      lastMode = sel.value;
+      showEstimate();
+    })
+    .catch(function () {});     // the default in the markup stands
 
   function showEstimate() {
     if (!state.durationS) return;

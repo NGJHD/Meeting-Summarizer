@@ -123,6 +123,25 @@ def check_shippable_config() -> None:
             "default. Set it to false, or pick High or Low Quality in the "
             "app, then rebuild."
         )
+    # The Output dropdown is the second thing the UI writes here, and it
+    # dirties the file the same way -- but this one is reset rather than
+    # refused. llm.external.enabled shipped wrong breaks a fresh install an
+    # hour into a job (9am); ui.mode shipped wrong preselects a dropdown the
+    # user can change, and failing the build over that would stop a release
+    # every time somebody tested Minutes. Section 13.2 has the default at
+    # "Summary & Minutes", so it is set back here.
+    #
+    # The file on disk is what changes, not just the copy in the zip: the
+    # working tree and the zip should not disagree about what was shipped.
+    # Said out loud, because a build that silently edits tracked files is
+    # worse than one that refuses.
+    mode = (cfg.get("ui") or {}).get("mode", "both")
+    if mode != "both":
+        cfg.setdefault("ui", {})["mode"] = "both"
+        (ROOT / "config.json").write_text(
+            json.dumps(cfg, indent=2) + '\n', encoding="utf-8")
+        print("config.json: ui.mode was %r, reset to \"both\" for the release"
+              % mode)
 
 
 def main() -> None:

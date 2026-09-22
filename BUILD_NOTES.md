@@ -3541,6 +3541,308 @@ transcript and are probably unaffected; the clustering ones may not be.
 **Evidence limits.** Two recordings, nine perturbation trials each, six
 ground-truth points on one of them.
 
+## 9av. A compound heading is two themes -- but "&" is not the test
+
+The summary's Key Themes lumped unrelated subjects under a single compound
+heading, worst on IQ3_XXS. On a 2h12m recording it produced twelve sections
+including:
+
+```
+### Third-Party Systems: Payroll, CRM & Ticketing Portal
+### Budget Review, Forecasting & Office Move
+```
+
+Five subjects under two headings. The reader cannot scan for one of them, and
+the prose under a compound heading drifts between them.
+
+**The first fix was wrong, and the operator's own reference output is what
+showed it.** The prompt said "organised by topic" and nothing about what a topic
+*is*, so the rule added was mechanical: if naming the theme needs an "&", an
+"and", a slash, a comma or a colon followed by a list, split it. That plus three
+corollaries -- name the thing not the category, do not group by adjacency, no
+upper limit on theme count -- ran to 27 added lines.
+
+It worked in the sense of splitting the lumps, and fractured everything else:
+
+| | headings | words | mean section |
+|---|---|---|---|
+| IQ4_XS reference, untouched prompt | 17 | 2635 | 155 |
+| IQ3_XXS, untouched prompt (the complaint) | 12 | 2683 | 224 |
+| IQ3_XXS, "no &" rule | 24 | 2395 | 100 |
+| IQ4_XS, "no &" rule | 27 | 3131 | 116 |
+
+The reference summary the operator had marked as good uses "&" throughout --
+"Budget Review & Forecasting", "Invoice Approval & Routing", "CRM & Licence
+Renewal". Those are *aspects of one subject*, and joining them is correct.
+"Payroll, CRM & Ticketing Portal" are three products. The conjunction was never
+the defect; what the conjunction joined was. Banning the character banned the
+good case along with the bad one, and the IQ4 output -- which had no defect to
+fix -- lost a third of its mean section length to it.
+
+**What shipped is one paragraph**, restoring the "&" that works and naming the
+distinction:
+
+> A heading may join closely related aspects of one subject: "Budget Review &
+> Forecasting" is one theme. It may not join separate systems, products or
+> deliverables that merely happen to be the same kind of thing -- "Third-Party
+> Systems: Payroll, CRM & Ticketing Portal" is three themes and must be
+> split into three, and "Budget Review, Forecasting & Office Move" is two. The test
+> is whether a reader looking for one of the things named in the heading would
+> find everything the meeting said about it underneath. Splitting like this does
+> not mean writing less about each; do not let a theme shrink to a single line.
+
+The last sentence is load-bearing: without it the model splits by moving text
+out rather than by writing more, and the fractured runs above are what that
+looks like.
+
+| | headings | words | range |
+|---|---|---|---|
+| IQ4_XS reference, untouched prompt | 17 | 2635 | 53-351 |
+| IQ3_XXS, one paragraph, run 1 | 15 | 2534 | 72-321 |
+| IQ3_XXS, one paragraph, run 2 | 14 | 2850 | 82-330 |
+| IQ4_XS, one paragraph, run 1 | 17 | 2891 | 57-450 |
+
+All three split Payroll, CRM and Ticketing Portal into three sections and Budget
+Review from Office Move. IQ4 lands on 17 headings, exactly the reference, so
+the model that had no defect is not being pushed around. IQ3 lands at 14-15
+against the reference 17 and its own 12 -- most of the way, not all of it:
+triple-barrelled headings survive on IQ3 ("Rollout Timeline, Permissions &
+Training"), which is what a nudge buys rather than a rule.
+
+One IQ3 run also emitted a catch-all `### Open Items & Unresolved Questions`,
+which the surrounding instruction already forbids (9ag: open questions sit
+inside the theme they arose in). It did not recur on the second run and no
+instruction was added for it -- an instruction that is already there and was
+ignored once by the weaker quant does not get restated.
+
+**Method note.** Every figure above is one final reduce over the *same* cached
+notes, same model, same sampling -- only the prompt differs. `speakers.save`
+keeps the notes, so each measurement is 170-560s rather than a 40-minute
+pipeline, which is the only reason four prompt variants could be compared at
+all. The reduce runs at `temperature: 1.0`, so single runs do not settle
+anything: the two IQ3 runs of the shipped paragraph differ by 316 words and one
+heading.
+
+`reduce_minutes.txt` was left untouched. Its Discussion Record has the same
+failure mode, but it is bulleted rather than prose and no output has been
+measured against it.
+
+**A stricter counting rule was tried next, and rejected.** The operator observed
+that where the model writes "<Category>: A, B & C" the parts are always separate
+subjects, and asked the fair question of whether the paragraph above works only
+because it names *this meeting's* failure -- every run to that point was the one
+meeting whose headings it quotes. Two objections followed, both correct: an
+exemption phrased as "two steps of one job" ("Backup & Restore") needs a
+semantic judgement IQ3 applies unevenly, and a colon-only trigger would fire on
+almost nothing -- of 21 three-item headings measured on IQ3, only 2 carried a
+category at all.
+
+So the paragraph was replaced with a rule needing no judgement: three or more
+things named in a heading is that many themes; a category followed by a list
+splits at any length; two things are never examined; a contrast is one subject.
+Every example invented, so nothing meeting-specific remained to memorise. On the
+heading metric it won clearly:
+
+| arm | runs | themes | list-shaped headings |
+|---|---|---|---|
+| shipped paragraph, IQ3 | 6 | 16.7 | 2.2 |
+| counting rule, IQ3 | 2 | 15.0 | **0.5** |
+| shipped paragraph, IQ4 | 4 | 16.5 | 2.0 |
+| counting rule, IQ4 | 2 | 16.0 | **1.0** |
+
+It was rejected anyway. Reading the documents, the operator found the prose
+"forced" and judged that it had invented details and decisions. That verdict
+governs: the metric is a proxy, the document is the product. The mechanism is
+visible in the runs -- splitting a lumped heading means writing a section about
+each part, and where the notes will not support three sections the model
+manufactures the connective material. One IQ3 run came in at 1947 words against
+a 2527-word reference, with two headings ("Permissions", "Training") that are
+stubs rather than themes. The paragraph's own
+closing line exists to prevent exactly that, and only half worked.
+
+**The lesson is about the measurement, not the wording.** A heading-shape metric
+counts headings; it cannot see invented content, and here it moved decisively in
+favour of the worse document. Anything tuned on it has to have its output read
+before it ships -- as with the checks in 9ax that looked plausible and
+discriminated nothing.
+
+That metric also had a bug worth recording, found only because a result looked
+wrong: it split on "/" inside compound terms, so "Read/Write Access &
+Audit Logging" counted as three items rather than two. Every figure in this
+section is post-correction; earlier readings ran about 1.3 higher on every arm,
+which flattered nothing but wasted a comparison.
+
+**The generalisation question remains open.** The shipped paragraph names three
+systems from one meeting and no run has tested it on another; testing on a
+second meeting was started and stopped at the operator's direction. A deliberate
+limit, not an oversight -- one run of any second meeting would settle it.
+
+## 9aw. The log did not say which timings the merge was about to read
+
+Alignment (section 9aj) silently replaces whisper's DTW word timings with
+wav2vec2's, and every failure path silently keeps the DTW ones -- by design,
+since this runs after transcription is already paid for. The consequence is that
+the log could not tell you which of the two the merge stage read, and the merge
+is where wrong attribution comes from. `whisper.align: false` logged nothing at
+all.
+
+Every path now names the source, so the log alone answers it:
+
+```
+align: re-timing 117 words with wav2vec2 forced alignment on 5 threads (replacing whisper's DTW timings)
+align: wav2vec2 re-timed 117 of 117 words in 3s - word timings are the aligned ones
+align: disabled in config.json, keeping whisper's DTW word timings
+align: wav2vec2-align.onnx missing, keeping whisper's DTW word timings
+align: wav2vec2 is English-only, keeping whisper's DTW word timings for language 'de'
+align: wav2vec2 placed no words, keeping whisper's DTW word timings
+align: failed (...), keeping whisper's DTW word timings
+```
+
+"DTW" is `_timing_source()`, not a literal: with `whisper.dtw: false` it reads
+"segment-level", which is what those timings actually are.
+
+The stage's own opening line was missing the same fact, and the backend with it:
+the command line is logged as `" ".join(cmd[1:])`, which deliberately drops
+argv[0], so nothing in the job log said which whisper build had run. It now
+opens with `whisper: whisper-cli.exe via cuda, word timings from DTW` -- the
+first thing to ask when transcription is unexpectedly slow.
+
+Alignment also gained a heartbeat. It is ~275s of silent CPU on a 2h12m
+recording, immediately after a stage that printed a line a second, so it read as
+a hang at the exact moment a user is still watching. `align_words` already
+called `on_progress` every 25 utterances; the parent now logs at each quarter
+and nothing between.
+
+**Diarization stages.** The three stages announced themselves on start and never
+on finish, so the time each one cost was only visible in the single `timings`
+line at the very end -- and, mid-run, the reader could not tell which stage they
+were sitting in, since `STAGE` only arrives when the *next* one begins. Each
+stage now closes with its own elapsed line, `reconstruct` is announced (it was
+silent), and the two cache hits are distinguished -- the worker emitted `STAGE
+cache` for both segmentation and embedding, so one message covered two very
+different amounts of saved work:
+
+```
+diarization: segmenting: finding speech and speaker changes
+diarization: segmenting 69%
+diarization: segmenting finished in 1s
+diarization: embedding: measuring each voice (the slow part)
+diarization: embedding finished in 7s
+diarization: clustering: grouping the voices into speakers
+diarization: clustering finished in 0s
+diarization: building speaker turns from the clustered voices
+diarization: turn building finished in 0s
+```
+
+and on a warm cache:
+
+```
+diarization: reusing the cached segmentation for this audio
+diarization: segmentation cache load finished in 0s
+diarization: reusing the cached voice measurements for this audio
+diarization: embedding cache load finished in 0s
+```
+
+Verified on `tools/test-audio/test-2spk-en-3.wav` cold and warm, and the four
+alignment paths verified by forcing each in turn (model renamed away,
+`align: false`, `language: de`).
+
+## 9ax. The summary was citing our scaffolding at the reader
+
+The operator's judgement on two IQ3 summaries was that the topic count was now
+right but "the content within that topic is mostly rubbish", against an IQ4
+reference that read well. Counting headings could not see the difference. What
+could, once looked for, was the summary referring to its own inputs:
+
+```
+flagged here because the notes do not record a final, unambiguous statement
+At (01:40:02) in the fourth segment the decision was reiterated: ...
+The decision at 01:37:51 (reconfirmed at 01:40:02 in Section 4) was ...
+<topic> was discussed (primarily in Section 1, around 00:28-00:34)
+```
+
+Whoever reads the summary has never seen "the notes" and does not know the
+recording was processed in pieces. Every one of those sentences is the model
+describing its homework. The IQ4 reference contains none; the IQ3 complaint
+contains fifteen. Minutes mode was worse in kind, putting it inside action items
+somebody is supposed to act on: `- [ ] <task> ... (Section 1,
+no exact timestamp)`.
+
+**Half of it was ours.** `run_map` headed every note block
+
+```
+### Section 4 of 4 (01:36:48 - 02:11:37)
+```
+
+and the ordinal is a label we invented. Nothing downstream reads it -- no prompt
+mentions it, no code parses it, and the summary is meant to be organised by
+theme rather than by section. The model was citing back the only name it had
+been given. The header is now `### 01:36:48 - 02:11:37`, which still carries the
+span it exists to carry. Removing an affordance beats instructing a model not to
+use it, and unlike a prompt change it cannot perturb anything else.
+
+The other half is our vocabulary: the prompt opens "from the working notes
+below" and labels the block `NOTES`, so the model says "the notes do not
+record". One paragraph in the framing of both reduce prompts -- deliberately not
+in Key Themes, so the theme structure that was already good is not disturbed --
+names the notes invisible and, more usefully, supplies the correct alternative:
+where the notes record that something is unclear, that is a fact about the
+*meeting* ("the owner was never named"), not about the notes.
+
+**Measured, 21 final reduces over the same cached notes, same models, same
+sampling.** Leaks counted as occurrences of `Section N`, `the Nth segment`,
+`segment N`, `the notes`, `chunk`.
+
+| arm | runs | leaks (total) | mean | worst run | themes (mean) | words (mean) |
+|---|---|---|---|---|---|---|
+| IQ3_XXS before | 6 | **13** | 2.17 | 5 | 16.0 | 2442 |
+| IQ3_XXS after | 6 | **1** | 0.17 | 1 | 16.7 | 2505 |
+| IQ4_XS before | 5 | 2 | 0.40 | 1 | 16.2 | 2741 |
+| IQ4_XS after | 4 | **0** | 0.00 | 0 | 16.5 | 2661 |
+
+IQ3 is clean in five runs of six; the survivor is a single "the notes record
+that a final, unambiguous answer ... was never given", which is the sentence the
+paragraph exists to redirect rather than a new failure. IQ4 goes to zero.
+
+**Nothing else moved**, which was the constraint -- the IQ4 summaries were
+already good and the operator did not want them disturbed. Theme count and
+length are flat across both arms (IQ3 16.0 -> 16.7, IQ4 16.2 -> 16.5; words
+within 3%), against a reference of 17 themes and 2527 words. The heading
+granularity from 9av survives: Payroll, CRM and Ticketing Portal are still three
+separate sections in every run.
+
+**One residual risk, untested.** The summary clause quotes the phrases it
+forbids ("Never write \"the notes do not record\""). Negative examples can prime
+what they prohibit; these numbers say it is not happening here, but the variant
+without the quoted examples is the first thing to try if this regresses.
+
+**What did not discriminate**, and should not be tracked:
+
+- *Entity coverage.* The summary the operator rejected scored **better** -- 0
+  unsupported capitalised terms against the good one's 1.
+- *Timestamp grounding.* Content-word overlap between each cited claim and the
+  transcript either side of that time: 1 of 17 citations weakly grounded on the
+  rejected summary, ~6%. Its timestamps are broadly honest.
+- *Invented acronym expansions.* Real, and the operator explicitly discounted
+  them: both documents assert expansions that appear nowhere in the transcript
+  (two on the good one, four on IQ3; the terms themselves are meeting
+  content and are deliberately not reproduced here). Worse on IQ3,
+  but not what made the document unusable.
+
+**A confound worth recording, because it nearly went unnoticed.** The two arms
+are the same audio and, word for word, the same transcript -- 15550 words each.
+They are *not* the same speaker partition:
+
+| | SPEAKER_00 | SPEAKER_01 | SPEAKER_02 | SPEAKER_03 |
+|---|---|---|---|---|
+| IQ4 arm | 28.5% | 32.6% | 5.5% | 33.5% |
+| IQ3 arm | 30.3% | 11.5% | 28.7% | 29.5% |
+
+No permutation maps one onto the other, so "SPEAKER_02 argued X" means a
+different person in the two documents. Cross-model *content* comparisons are
+therefore only as good as that, and nothing in the reduce prompt can repair it.
+Within-arm comparisons -- which is what every figure above is -- are unaffected.
+
 ---
 
 # What this codebase keeps teaching

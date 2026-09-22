@@ -154,9 +154,19 @@ def run_map(job: Job, server: llm.LlamaServer, chunks: list[Chunk], cfg: dict) -
             jobs.log_exception(exc)
             job.log("map: chunk %d failed, inserting a placeholder" % chunk.index)
             text = "## Themes\n%s\n" % PLACEHOLDER
+        # The span, and deliberately not "Section 3 of 4".
+        #
+        # The ordinal is ours -- nothing downstream reads it -- and the
+        # final reduce cited it back at the reader: "reconfirmed at
+        # 01:40:02 in Section 4", "in the fourth segment". Whoever reads
+        # the summary has never seen a section and does not know the
+        # recording was processed in pieces. Removing the label removes
+        # the affordance, which is cheaper and more reliable than asking
+        # the model not to use it (BUILD_NOTES 9ax). The span stays --
+        # that is what it should be citing.
         notes.append(
-            "### Section %d of %d (%s - %s)\n\n%s"
-            % (chunk.index, chunk.total, chunk.time_start, chunk.time_end, text)
+            "### %s - %s\n\n%s"
+            % (chunk.time_start, chunk.time_end, text)
         )
         job.set_progress("map", chunk.index / max(len(chunks), 1))
 
@@ -226,7 +236,7 @@ def run_group_reduce(
                 jobs.log_exception(exc)
                 job.log("group reduce: group %d failed, passing its notes through" % i)
                 text = "\n\n".join(group)
-            out_notes.append("### Section %s - %s\n\n%s" % (start, end, text))
+            out_notes.append("### %s - %s\n\n%s" % (start, end, text))
             out_spans.append((start, end))
         notes, spans = out_notes, out_spans
         job.set_progress("group_reduce", 1.0)

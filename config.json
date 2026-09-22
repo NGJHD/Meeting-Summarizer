@@ -69,5 +69,8 @@
     "transcript_tokens_per_audio_minute": 206,
     "fixed_overhead_s": 60,
     "buffer_fraction": 0
+  },
+  "ui": {
+    "mode": "both"
   }
 }

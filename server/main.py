@@ -190,6 +190,40 @@ async def model_choice(request: Request):
     return {"ok": True}
 
 
+@app.get("/api/mode")
+async def get_mode() -> dict:
+    """The Output dropdown's remembered value, for the page to open on."""
+    return {"mode": await asyncio.to_thread(config.ui_mode)}
+
+
+@app.post("/api/mode")
+async def set_mode(request: Request):
+    """Remember the Output dropdown, the way the Model one is remembered.
+
+    Which document somebody wants is a fact about them and their meetings, not
+    something we can detect -- so unlike High/Low there is nothing better to
+    fall back to than what they picked last time.
+
+    Written on change rather than on Process, matching /api/models/choice: a
+    user who sets it and then closes the window has still expressed a
+    preference, and losing it there is the case most likely to annoy.
+    """
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        pass
+    mode = str(body.get("mode") or "")
+    if mode not in config.MODES:
+        return JSONResponse({"error": "That isn't an output option."},
+                            status_code=400)
+    try:
+        await asyncio.to_thread(config.save_mode_choice, mode)
+    except (RuntimeError, OSError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+    return {"ok": True}
+
+
 @app.get("/api/current")
 async def current_job() -> dict:
     """The job in flight, if any.

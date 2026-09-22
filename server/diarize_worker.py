@@ -618,7 +618,7 @@ def main(argv: list[str]) -> int:
         emb_cache = wav_path.parent / ("embeddings-%s-emb.npz" % key)
 
         if use_cache and seg_cache.exists():
-            _emit("STAGE cache")
+            _emit("STAGE cache_segment")
             z = np.load(seg_cache)
             labels, has_last = z["labels"], bool(z["has_last"][0])
             timings["segment"] = float(z["t_segment"][0])
@@ -634,7 +634,7 @@ def main(argv: list[str]) -> int:
                 )
 
         if use_cache and emb_cache.exists():
-            _emit("STAGE cache")
+            _emit("STAGE cache_embed")
             z = np.load(emb_cache)
             pairs, embeddings, weights = z["pairs"], z["embeddings"], z["weights"]
             skipped = int(z["skipped"][0])
@@ -701,6 +701,7 @@ def main(argv: list[str]) -> int:
         stats["centroid_merges"] = merges
         stats["clusters_kept"] = len(set(int(c) for c in assignment if c >= 0))
 
+        _emit("STAGE reconstruct")
         spf = frame_speaker_count(labels, seg_m)
         t0 = time.time()
         segments = build_segments(
