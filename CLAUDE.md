@@ -1302,6 +1302,16 @@ Requirements:
 - Do not read whole audio files or whole uploads into memory. Stream everything.
 - Do not delete the merged transcript after producing the summary. Keep it.
 - Do not hard-code any assumption that a recording is 4 hours long.
+- **Never put anything from a real recording into anything published** — commit
+  messages, release notes, tags, PR text, `BUILD_NOTES.md`, prompts, code comments or
+  test fixtures. That means names of people, organisations, products, systems, projects
+  and sites; acronyms and their expansions; figures; quoted lines; and the headings or
+  sentences a model produced from one. Meeting content is sensitive, and a commit message
+  or release note is public and effectively permanent. When a finding needs an example,
+  describe it structurally ("a heading that joined three unrelated systems") or invent a
+  neutral one ("Payroll, CRM & Ticketing Portal") and do not present it as real output.
+  Before committing or publishing a release, re-read the message and the diff for
+  anything that came from a transcript, summary or minutes.
 
 ---
 
