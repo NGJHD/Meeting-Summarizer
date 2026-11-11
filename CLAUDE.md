@@ -279,7 +279,7 @@ operator edits this file in Notepad; the end user never sees it.
   "chunking": {
     "target_tokens": 10000,
     "overlap_tokens": 400,
-    "max_map_output_tokens": 1500,
+    "max_map_output_tokens": 2500,
     "group_reduce_threshold": 8,
     "group_size": 5,
     "max_group_output_tokens": 2500

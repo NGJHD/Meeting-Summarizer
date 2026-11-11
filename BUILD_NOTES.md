@@ -3845,6 +3845,50 @@ Within-arm comparisons -- which is what every figure above is -- are unaffected.
 
 ---
 
+## 9ay. The map notes were being cut off at 1,500 tokens
+
+`chunking.max_map_output_tokens` was 1500, and **every map call on a real meeting ended at
+exactly 1,500 completion tokens**. §9c and §9m record that as what map calls "run" to; it was
+the cap. Generation stops mid-sentence when it is reached.
+
+What it cuts is not the end of the chunk but **the last headings of the notes**, because
+the notes are written heading by heading: Themes, Positions, Outcomes, Loose Ends, Speaker
+Evidence. The cached notes of two real meetings, by how far each got:
+
+| meeting | note 1 | note 2 | note 3 | note 4 |
+|---|---|---|---|---|
+| 1h09m (3 chunks) | stopped in Positions | stopped in Themes | complete | — |
+| 2h12m (4 chunks) | stopped in Positions | stopped in Loose Ends | stopped in Themes | stopped in Themes |
+
+So for most of each meeting the final reduce never saw Outcomes -- the decisions -- and
+**no Speaker Evidence at all on the 2h12m meeting**, which is what speaker naming depends on.
+
+Re-run at 2500 on exactly the same transcripts (only the final reduce stage and the map
+re-run; same code, same IQ4_XS model), compared with the summaries the app had produced:
+
+| | 1h09m @1500 | 1h09m @2500 | 2h12m @1500 | 2h12m @2500 |
+|---|---|---|---|---|
+| notes reaching Outcomes | 1 of 3 | 2 of 3 | 1 of 4 | 3 of 4 |
+| notes reaching Speaker Evidence | 1 of 3 | 1 of 3 | 0 of 4 | 2 of 4 |
+| words | 1,982 | 2,151 | 2,352 | 3,765 |
+| `###` topics | 14 | 16 | 16 | 16 |
+| timestamps cited | 2 | 2 | 30 | 55 |
+| decision wording | 18 | 16 | 15 | 24 |
+| LLM stage | — | 6 min | — | 9 min |
+
+The 2h12m summary gained substantially: decisions, timestamps, and a speaker identification
+("SPEAKER_00 (likely …)") that only became possible once Speaker Evidence reached the
+reduce. The 1h09m one gained two topics and little else. **Default is now 2500.**
+
+Not solved: even at 2500 the longest notes still stop early (note 1 of the 1h09m meeting
+still ends in Positions), because the map prompt asks for exhaustive notes and the model
+fills whatever room it has. A known side effect of fuller notes: the 2h12m summary added an
+"Open Items" section with bullets, which §9ag's two-section layout does not ask for.
+
+Context budget at 2500: 8 chunks x 2,500 + the reduce prompt + 12,000 + 2,000 exceeds
+32,768, so a meeting near the group-reduce threshold now takes an extra group tier through
+`_fit_for_final`. That is the existing guard doing its job, not a failure.
+
 # What this codebase keeps teaching
 
 Five patterns cost most of a day between them, each more than once. They are
