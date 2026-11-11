@@ -96,7 +96,7 @@ def build_chunks(
     # for 32k would then be refused by the guard in reduce.py with a message
     # about the recording being too long, which is not what went wrong.
     # Size the chunk to the window that actually exists instead.
-    max_out = int(ccfg.get("max_map_output_tokens", 2500))
+    max_out = int(ccfg.get("max_map_output_tokens", 4500))
     room = server.ctx_size - max_out - 2000 - PROMPT_ALLOWANCE
     if room < target:
         job.log("chunker: %d-token context, so chunking at %d rather than %d"

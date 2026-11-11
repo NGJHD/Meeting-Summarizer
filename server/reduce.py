@@ -95,7 +95,7 @@ def _guard(job: Job, server: llm.LlamaServer, prompt: str, max_out: int, cfg: di
 def run_map(job: Job, server: llm.LlamaServer, chunks: list[Chunk], cfg: dict) -> list[str]:
     """One call per chunk. Thinking off: this is mechanical extraction."""
     template = llm.load_prompt("map")
-    max_out = int(cfg["chunking"].get("max_map_output_tokens", 2500))
+    max_out = int(cfg["chunking"].get("max_map_output_tokens", 4500))
     think = bool(cfg["thinking"].get("map", False))
     # How long one map call is expected to take here, so the bar can move
     # inside it rather than only between chunks.

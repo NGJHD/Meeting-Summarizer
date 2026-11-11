@@ -231,7 +231,7 @@ _DEFAULTS = {
     "chunking": {
         "target_tokens": 10000,
         "overlap_tokens": 400,
-        "max_map_output_tokens": 2500,
+        "max_map_output_tokens": 4500,
         "group_reduce_threshold": 8,
         "group_size": 5,
         "max_group_output_tokens": 2500,

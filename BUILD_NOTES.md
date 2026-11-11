@@ -3845,7 +3845,7 @@ Within-arm comparisons -- which is what every figure above is -- are unaffected.
 
 ---
 
-## 9ay. The map notes were being cut off at 1,500 tokens
+## 9ay. The map notes were being cut off at 1,500 tokens (now 4500)
 
 `chunking.max_map_output_tokens` was 1500, and **every map call on a real meeting ended at
 exactly 1,500 completion tokens**. §9c and §9m record that as what map calls "run" to; it was
@@ -3878,16 +3878,36 @@ re-run; same code, same IQ4_XS model), compared with the summaries the app had p
 
 The 2h12m summary gained substantially: decisions, timestamps, and a speaker identification
 ("SPEAKER_00 (likely …)") that only became possible once Speaker Evidence reached the
-reduce. The 1h09m one gained two topics and little else. **Default is now 2500.**
+reduce. The 1h09m one gained two topics and little else.
 
-Not solved: even at 2500 the longest notes still stop early (note 1 of the 1h09m meeting
-still ends in Positions), because the map prompt asks for exhaustive notes and the model
-fills whatever room it has. A known side effect of fuller notes: the 2h12m summary added an
-"Open Items" section with bullets, which §9ag's two-section layout does not ask for.
+But 2500 still cut notes short (note 1 of the 1h09m meeting still ended in Positions), and
+the 2h12m summary added an "Open Items" section with bullets, which §9ag's two-section
+layout does not ask for.
 
-Context budget at 2500: 8 chunks x 2,500 + the reduce prompt + 12,000 + 2,000 exceeds
-32,768, so a meeting near the group-reduce threshold now takes an extra group tier through
-`_fit_for_final`. That is the existing guard doing its job, not a failure.
+**At 4500 the cap stops binding.** Every note on both meetings finished on its own, at
+585-3,937 tokens -- the notes' natural length, measured for the first time:
+
+| | 1h09m @2500 | 1h09m @4500 | 2h12m @2500 | 2h12m @4500 |
+|---|---|---|---|---|
+| notes with all five headings | 1 of 3 | **3 of 3** | 2 of 4 | **4 of 4** |
+| words | 2,151 | 2,692 | 3,765 | 3,379 |
+| `###` topics | 16 | 17 | 16 | 17 |
+| decision wording | 21 | 19 | 26 | **32** |
+| bullet lines | 5 | 5 | 14 | **0** |
+| hedges ("unclear", "likely", ...) | 2 | 6 | 14 | 3 |
+| repeated sentences | 0 | 0 | 0 | 0 |
+| LLM stage | 6 min | 6.4 min | 9 min | 9.4 min |
+
+No sign of noise: no repetition, less hedging on the longer meeting, and with complete notes
+the 2h12m summary folded its open items back into the themes instead of adding a bulleted
+section. It cost about 25 s per meeting, because notes stop when they are finished. One
+run each at temperature 0.7, so the decision counts carry sampling noise; completeness
+does not. **Default is now 4500.**
+
+Context budget: notes now run to their natural ~2,000-4,000 tokens, so from about six
+chunks (~4 hours) the final prompt + 12,000 + 2,000 exceeds 32,768 and `_fit_for_final`
+adds a group tier. That is the existing guard doing its job, not a failure; it adds a few
+minutes to very long meetings.
 
 # What this codebase keeps teaching
 
